@@ -1,13 +1,8 @@
 #include "Arduino.h"
 #include "PCF8574.h"
-#include <WiFi.h>
-#include <WiFiAP.h>
-#include <WebServer.h>
 
 // --- Constants ---
 #define DEBUG_MODE 1            // Set to 1 to enable detailed debugging
-const char* ssid = "ESP32-AccessPoint";
-const char* password = "password";
 const unsigned long DEBOUNCE_TIME = 100;  // Increased debounce time
 
 // --- Hardware ---
@@ -22,9 +17,6 @@ enum SequenceState {
 };
 SequenceState currentState = IDLE;
 
-// --- Web Server ---
-WebServer server(80);
-
 // --- Input Handling ---
 bool debouncedInputStates[6] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 bool lastInputStates[6] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
@@ -34,40 +26,50 @@ unsigned long lastInputChangeTime[6] = {0, 0, 0, 0, 0, 0};
 unsigned long lastDebugPrint = 0;
 unsigned long sequenceStartTime = 0;
 
+// --- Serial Command Handling ---
+String serialCommand = "";
+bool commandComplete = false;
+
 // --- Function Declarations ---
 void setupHardware();
-void setupWiFi();
 void updateInputs();
-void handleRoot();
-void handleToggleRelay();
-void handleStartSequence();
 void processStateMachine();
+void processSerialCommand();
 void printDebugInfo();
+void printHelp();
 
 void setup() {
   Serial.begin(115200);
   Serial.println("\n\n=== TARCZOWNIX Control System ===");
   
   setupHardware();
-  setupWiFi();
-  
-  // Set up web server routes
-  server.on("/", handleRoot);
-  server.on("/toggle", handleToggleRelay);
-  server.on("/start", handleStartSequence);
-  server.begin();
   
   Serial.println("System initialization complete");
+  printHelp();
 }
 
 void loop() {
-  // 1. Handle web client requests
-  server.handleClient();
+  // 1. Process any serial commands
+  if (Serial.available() > 0) {
+    char inChar = (char)Serial.read();
+    
+    if (inChar == '\n' || inChar == '\r') {
+      commandComplete = true;
+    } else {
+      serialCommand += inChar;
+    }
+  }
   
-  // 2. Update input states with debouncing (separated from relay control)
+  if (commandComplete) {
+    processSerialCommand();
+    serialCommand = "";
+    commandComplete = false;
+  }
+  
+  // 2. Update input states with debouncing
   updateInputs();
   
-  // 3. Process state machine based on debounced inputs (not direct reads)
+  // 3. Process state machine based on debounced inputs
   processStateMachine();
   
   // 4. Print debug information periodically
@@ -106,20 +108,6 @@ void setupHardware() {
   }
   
   Serial.println("Hardware initialization successful");
-}
-
-void setupWiFi() {
-  Serial.println("Setting up WiFi access point...");
-  WiFi.softAP(ssid, password);
-  
-  // Configure static IP
-  IPAddress local_ip(192, 168, 1, 111);
-  IPAddress gateway(192, 168, 1, 1);
-  IPAddress subnet(255, 255, 255, 0);
-  WiFi.softAPConfig(local_ip, gateway, subnet);
-  
-  Serial.print("Access point IP: ");
-  Serial.println(WiFi.softAPIP());
 }
 
 void updateInputs() {
@@ -174,102 +162,53 @@ void processStateMachine() {
   }
 }
 
-void handleRoot() {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  html += "<title>TARCZOWNIX Control</title>";
-  html += "<style>";
-  html += "body{font-family:Arial;text-align:center;margin:0;padding:20px;background-color:#f5f5f5;}";
-  html += ".container{max-width:800px;margin:0 auto;background-color:white;padding:20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}";
-  html += ".status{margin:20px 0;padding:15px;border:1px solid #ddd;border-radius:5px;}";
-  html += ".on{color:green;font-weight:bold;}";
-  html += ".off{color:red;}";
-  html += "button{background-color:#4CAF50;border:none;color:white;padding:10px 20px;text-align:center;";
-  html += "text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:5px;}";
-  html += ".startbtn{background-color:#007bff;padding:12px 25px;font-size:18px;}";
-  html += "table{width:100%;border-collapse:collapse;}";
-  html += "th,td{padding:10px;text-align:left;border-bottom:1px solid #ddd;}";
-  html += "</style>";
-  html += "</head><body><div class=\"container\">";
-  html += "<h1>TARCZOWNIX Control System</h1>";
+void processSerialCommand() {
+  serialCommand.trim();
+  Serial.println("Command: " + serialCommand);
   
-  // Sequence Status
-  html += "<div class=\"status\"><h2>Sequence Status</h2>";
-  html += "<p>Current state: ";
-  switch (currentState) {
-    case IDLE:
-      html += "<span>IDLE</span>";
-      break;
-    case RELAY0_ACTIVE_WAITING:
-      html += "<span class=\"on\">RELAY 0 ACTIVE - Waiting for Input 0</span>";
-      break;
-    case RELAY1_ACTIVE_WAITING:
-      html += "<span class=\"on\">RELAY 1 ACTIVE - Waiting for Input 1</span>";
-      break;
+  if (serialCommand.equalsIgnoreCase("help")) {
+    printHelp();
   }
-  html += "</p>";
-  html += "<a href=\"/start\"><button class=\"startbtn\">Start Sequence</button></a>";
-  html += "</div>";
-  
-  // Input status table
-  html += "<div class=\"status\"><h2>Input Status</h2><table>";
-  html += "<tr><th>Input</th><th>State</th></tr>";
-  for (int i = 0; i < 6; i++) {
-    html += "<tr><td>Input P" + String(i) + "</td>";
-    String spanClass = debouncedInputStates[i] ? "off" : "on";
-    String status = debouncedInputStates[i] ? "INACTIVE" : "ACTIVE";
-    html += "<td><span class=\"" + spanClass + "\">" + status + "</span></td></tr>";
+  else if (serialCommand.equalsIgnoreCase("status")) {
+    printDebugInfo();
   }
-  html += "</table></div>";
-  
-  // Relay status and control table
-  html += "<div class=\"status\"><h2>Relay Control</h2><table>";
-  html += "<tr><th>Relay</th><th>State</th><th>Action</th></tr>";
-  for (int i = 0; i < 6; i++) {
-    int value = relays.digitalRead(i);
-    html += "<tr><td>Relay P" + String(i) + "</td>";
-    String statusClass = (value == 0) ? "on" : "off";
-    String statusText = (value == 0) ? "ON" : "OFF";
-    html += "<td><span class=\"" + statusClass + "\">" + statusText + "</span></td>";
-    html += "<td><a href=\"/toggle?relay=" + String(i) + "\"><button>Toggle</button></a></td></tr>";
+  else if (serialCommand.equalsIgnoreCase("start")) {
+    // Reset to start of sequence
+    currentState = RELAY0_ACTIVE_WAITING;
+    relays.digitalWrite(0, LOW);  // Turn on relay 0 (LOW = ON)
+    relays.digitalWrite(1, HIGH); // Make sure relay 1 is OFF
+    sequenceStartTime = millis();
+    
+    Serial.println("ACTION: Starting sequence - Relay 0 activated");
   }
-  html += "</table></div>";
-  
-  html += "</div></body></html>";
-  
-  server.send(200, "text/html", html);
-}
-
-void handleToggleRelay() {
-  String relayParam = server.arg("relay");
-  int relayPin = relayParam.toInt();
-  
-  if (relayPin >= 0 && relayPin < 6) {
-    // Toggle the relay state
-    int currentState = relays.digitalRead(relayPin);
-    relays.digitalWrite(relayPin, !currentState);
-    Serial.printf("ACTION: Toggled relay %d to %s\n", relayPin, currentState ? "ON" : "OFF");
+  else if (serialCommand.startsWith("toggle ")) {
+    int relayPin = serialCommand.substring(7).toInt();
+    
+    if (relayPin >= 0 && relayPin < 6) {
+      // Toggle the relay state
+      int currentState = relays.digitalRead(relayPin);
+      relays.digitalWrite(relayPin, !currentState);
+      Serial.printf("ACTION: Toggled relay %d to %s\n", relayPin, currentState ? "ON" : "OFF");
+    } else {
+      Serial.println("ERROR: Invalid relay number. Must be 0-5.");
+    }
   }
-  
-  server.sendHeader("Location", "/", true);
-  server.send(302, "text/plain", "");
-}
-
-void handleStartSequence() {
-  // Reset to start of sequence
-  currentState = RELAY0_ACTIVE_WAITING;
-  relays.digitalWrite(0, LOW);  // Turn on relay 0 (LOW = ON)
-  relays.digitalWrite(1, HIGH); // Make sure relay 1 is OFF
-  sequenceStartTime = millis();
-  
-  Serial.println("ACTION: Starting sequence - Relay 0 activated");
-  
-  server.sendHeader("Location", "/", true);
-  server.send(302, "text/plain", "");
+  else if (serialCommand.equalsIgnoreCase("stop")) {
+    // Stop any sequence and return to idle
+    currentState = IDLE;
+    // Turn off all relays
+    for (int i = 0; i < 6; i++) {
+      relays.digitalWrite(i, HIGH);  // All relays OFF (HIGH)
+    }
+    Serial.println("ACTION: Stopped sequence - All relays off");
+  }
+  else {
+    Serial.println("ERROR: Unknown command. Type 'help' for available commands.");
+  }
 }
 
 void printDebugInfo() {
-  Serial.println("\n--- DEBUG INFO ---");
+  Serial.println("\n--- SYSTEM STATUS ---");
   Serial.printf("State: %s\n", 
     currentState == IDLE ? "IDLE" : 
     currentState == RELAY0_ACTIVE_WAITING ? "RELAY0_ACTIVE_WAITING" : 
@@ -293,5 +232,15 @@ void printDebugInfo() {
   }
   Serial.println();
   
-  Serial.println("-----------------");
+  Serial.println("-------------------");
+}
+
+void printHelp() {
+  Serial.println("\n=== AVAILABLE COMMANDS ===");
+  Serial.println("help    - Show this help message");
+  Serial.println("status  - Show system status");
+  Serial.println("start   - Start the sequence");
+  Serial.println("stop    - Stop any running sequence");
+  Serial.println("toggle X - Toggle relay X (0-5)");
+  Serial.println("=========================");
 }
