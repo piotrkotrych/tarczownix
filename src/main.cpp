@@ -168,6 +168,20 @@ void setup() {
     html += "<div class='container'>";
     html += "<h1>TARCZOWNIX Control</h1>";
 
+    // Relay control section
+    html += "<div class='card'>";
+    html += "<h2>Sequence Control</h2>";
+    html += "<p>Click the button below to start the relay sequence:</p>";
+    html += "<a href='/start' class='btn'>Start Relay 0</a>";
+    html += "<p>Current relay states:</p>";
+    html += "<ul style='list-style-type:none; padding:0;'>";
+    // relay states
+    for (int i = 0; i < 6; i++) {
+      html += "<li>Relay " + String(i) + ": " + (relays.digitalRead(i) == LOW ? "ON" : "OFF") + "</li>";
+    }
+    html += "</ul>";
+    html += "</div>";
+
     // Delay configuration section for each relay
     for (int i = 0; i < 6; i++) {
       html += "<div class='card'>";
@@ -198,19 +212,22 @@ void setup() {
     String message;
     bool hasError = false;
 
-    if (relays.digitalRead(0) == LOW) {
-      message = "Relay 0 is already ON";
-      hasError = true;
-    } else {
-      Serial.println("Relay 0 is OFF, turning it ON");
+    // start relays 0, 2, 4 and check if they are not on
+    if (relays.digitalRead(0) == HIGH && relays.digitalRead(2) == HIGH && relays.digitalRead(4) == HIGH) {
       relays.digitalWrite(0, LOW); // Set relay 0 to on
-      message = "Relay 0 has been turned ON";
+      relays.digitalWrite(2, LOW); // Set relay 2 to on
+      relays.digitalWrite(4, LOW); // Set relay 4 to on
+      message = "Relay 0, 2, and 4 are now ON";
+    } else {
+      message = "Error: One or more relays are already ON";
+      hasError = true;
     }
+
 
     // Return response with redirect
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta http-equiv='refresh' content='3;url=/' />"; // Redirect after 3 seconds
-    html += "<title>Relay 0 Status</title><style>";
+    html += "<title>Start sequences</title><style>";
     html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
     html += ".success { color: green; }";
     html += ".error { color: red; }";
@@ -237,7 +254,7 @@ void loop() {
       delay(getRandomDelay(0)); // Add random delay before next action
       relays.digitalWrite(1, LOW); // Set relay 1 to on
     }
-    delay(100); // Wait for 1 second before checking again
+    delay(10); // Wait for 1 second before checking again
   }
 
   if(relays.digitalRead(1) == LOW) {
@@ -248,7 +265,48 @@ void loop() {
       delay(getRandomDelay(1)); // Add random delay before next action
       relays.digitalWrite(0, LOW); // Set relay 0 to on
     }
-    delay(100); // Wait for 1 second before checking again
+    delay(10); // Wait for 1 second before checking again
+  }
+
+  if(relays.digitalRead(2) == LOW) {
+    Serial.println("Relay 2 is ON");
+    if(inputs.digitalRead(2) == LOW) {
+      Serial.println("Input 2 is LOW, turning off relay 2");
+      relays.digitalWrite(2, HIGH); // Set relay 2 to off
+      delay(getRandomDelay(2)); // Add random delay before next action
+      relays.digitalWrite(3, LOW); // Set relay 3 to on
+    }
+    delay(10); // Wait for 1 second before checking again
+  }
+  if(relays.digitalRead(3) == LOW) {
+    Serial.println("Relay 3 is ON");
+    if(inputs.digitalRead(3) == LOW) {
+      Serial.println("Input 3 is LOW, turning off relay 3");
+      relays.digitalWrite(3, HIGH); // Set relay 3 to off
+      delay(getRandomDelay(3)); // Add random delay before next action
+      relays.digitalWrite(2, LOW); // Set relay 2 to on
+    }
+    delay(10); // Wait for 1 second before checking again
+  }
+  if(relays.digitalRead(4) == LOW) {
+    Serial.println("Relay 4 is ON");
+    if(inputs.digitalRead(4) == LOW) {
+      Serial.println("Input 4 is LOW, turning off relay 4");
+      relays.digitalWrite(4, HIGH); // Set relay 4 to off
+      delay(getRandomDelay(4)); // Add random delay before next action
+      relays.digitalWrite(5, LOW); // Set relay 5 to on
+    }
+    delay(10); // Wait for 1 second before checking again
+  }
+  if(relays.digitalRead(5) == LOW) {
+    Serial.println("Relay 5 is ON");
+    if(inputs.digitalRead(5) == LOW) {
+      Serial.println("Input 5 is LOW, turning off relay 5");
+      relays.digitalWrite(5, HIGH); // Set relay 5 to off
+      delay(getRandomDelay(5)); // Add random delay before next action
+      relays.digitalWrite(4, LOW); // Set relay 4 to on
+    }
+    delay(10); // Wait for 1 second before checking again
   }
   
   // Short delay to prevent CPU overuse
