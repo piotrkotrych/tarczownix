@@ -246,71 +246,8 @@ void setup() {
 
 void loop() {
 
-  if(relays.digitalRead(0) == LOW) {
-    Serial.println("Relay 0 is ON");
-    if(inputs.digitalRead(0) == LOW) {
-      Serial.println("Input 0 is LOW, turning off relay 0");
-      relays.digitalWrite(0, HIGH); // Set relay 0 to off
-      delay(getRandomDelay(0)); // Add random delay before next action
-      relays.digitalWrite(1, LOW); // Set relay 1 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-
-  if(relays.digitalRead(1) == LOW) {
-    Serial.println("Relay 1 is ON");
-    if(inputs.digitalRead(1) == LOW) {
-      Serial.println("Input 1 is LOW, turning off relay 1");
-      relays.digitalWrite(1, HIGH); // Set relay 1 to off
-      delay(getRandomDelay(1)); // Add random delay before next action
-      relays.digitalWrite(0, LOW); // Set relay 0 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-
-  if(relays.digitalRead(2) == LOW) {
-    Serial.println("Relay 2 is ON");
-    if(inputs.digitalRead(2) == LOW) {
-      Serial.println("Input 2 is LOW, turning off relay 2");
-      relays.digitalWrite(2, HIGH); // Set relay 2 to off
-      delay(getRandomDelay(2)); // Add random delay before next action
-      relays.digitalWrite(3, LOW); // Set relay 3 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-  if(relays.digitalRead(3) == LOW) {
-    Serial.println("Relay 3 is ON");
-    if(inputs.digitalRead(3) == LOW) {
-      Serial.println("Input 3 is LOW, turning off relay 3");
-      relays.digitalWrite(3, HIGH); // Set relay 3 to off
-      delay(getRandomDelay(3)); // Add random delay before next action
-      relays.digitalWrite(2, LOW); // Set relay 2 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-  if(relays.digitalRead(4) == LOW) {
-    Serial.println("Relay 4 is ON");
-    if(inputs.digitalRead(4) == LOW) {
-      Serial.println("Input 4 is LOW, turning off relay 4");
-      relays.digitalWrite(4, HIGH); // Set relay 4 to off
-      delay(getRandomDelay(4)); // Add random delay before next action
-      relays.digitalWrite(5, LOW); // Set relay 5 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-  if(relays.digitalRead(5) == LOW) {
-    Serial.println("Relay 5 is ON");
-    if(inputs.digitalRead(5) == LOW) {
-      Serial.println("Input 5 is LOW, turning off relay 5");
-      relays.digitalWrite(5, HIGH); // Set relay 5 to off
-      delay(getRandomDelay(5)); // Add random delay before next action
-      relays.digitalWrite(4, LOW); // Set relay 4 to on
-    }
-    delay(10); // Wait for 1 second before checking again
-  }
-  
   // Short delay to prevent CPU overuse
-  delay(10);
+  delay(1);
 }
 
 // Function to get a random delay in milliseconds for a specific relay
