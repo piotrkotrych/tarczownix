@@ -1,61 +1,61 @@
 #include <Arduino.h>
-#include <Wire.h> // Include the Wire library for I2C communication
-#include <PCF8574.h> // Include the xreef/PCF8574 library
+#include <Wire.h>      // Explicitly include Wire
+#include <PCF8574.h>   // Include the xreef/PCF8574 library
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <stdlib.h>    // Required for random()
 
 // --- Hardware Configuration ---
 #define PCF_ADDRESS_RELAYS 0x24 // I2C Address for the RELAY PCF8574
 #define PCF_ADDRESS_INPUTS 0x22 // I2C Address for the INPUT PCF8574
+#define I2C_SDA_PIN 4           // Your SDA pin
+#define I2C_SCL_PIN 15          // Your SCL pin
 
+// --- Pin Configuration ---
 const int PAIR_COUNT = 3;
-// These arrays now refer to pin numbers (0-7) on their *respective* PCF chips
-const int RELAY_PINS[PAIR_COUNT * 2] = {0, 1, 2, 3, 4, 5}; // Pins 0-5 on the RELAY PCF (0x24)
-const int INPUT_PINS[PAIR_COUNT * 2] = {0, 1, 2, 3, 4, 5}; // Pins 0-5 on the INPUT PCF (0x22)
+const int RELAY_PINS[PAIR_COUNT * 2] = {0, 1, 2, 3, 4, 5}; // Pins on RELAY PCF (0x24)
+const int INPUT_PINS[PAIR_COUNT * 2] = {0, 1, 2, 3, 4, 5}; // Pins on INPUT PCF (0x22)
 
-// --- Test Configuration ---
-// NOTE: Using placeholder values. Integrate webserver config if needed.
-const int MIN_DELAY_MS = 1500; // Minimum random delay in milliseconds
-const int MAX_DELAY_MS = 4000; // Maximum random delay in milliseconds
+// --- Timing Configuration ---
+const int MIN_DELAY_MS = 1500; // Minimum delay after input trigger
+const int MAX_DELAY_MS = 4000; // Maximum delay after input trigger
 
-// --- Global Objects (using xreef/PCF8574 library) ---
-PCF8574 pcf_relays(PCF_ADDRESS_RELAYS, 4, 15); // PCF object for relays
-PCF8574 pcf_inputs(PCF_ADDRESS_INPUTS, 4, 15); // PCF object for inputs
+// --- Global Objects ---
+PCF8574 pcf_relays(PCF_ADDRESS_RELAYS);
+PCF8574 pcf_inputs(PCF_ADDRESS_INPUTS);
 SemaphoreHandle_t i2cMutex; // Mutex for thread-safe I2C bus access
+
+// --- Global Control Flag ---
+volatile bool sequenceEnabled = false; // <<< ADDED: Start in disabled state
 
 // --- Task Data Structure ---
 struct MotorTaskData {
-    int pairIndex;         // Index (0, 1, 2)
-    int relayA;            // Pin number for relay A on pcf_relays
-    int relayB;            // Pin number for relay B on pcf_relays
-    int inputA;            // Pin number for input A on pcf_inputs
-    int inputB;            // Pin number for input B on pcf_inputs
-    bool activeRelayA;     // Which relay is currently active (or should be)
+    int pairIndex;
+    int relayA;
+    int relayB;
+    int inputA;
+    int inputB;
+    bool activeRelayA; // Tracks which relay (A or B) is the target for the next activation
 };
 
 // Global array to hold runtime data for all pairs
 MotorTaskData motorTaskData[PAIR_COUNT];
 
 // --- Thread-Safe PCF8574 Functions ---
-// IMPORTANT: Assume relays are ACTIVE LOW (LOW = ON, HIGH = OFF)
-// IMPORTANT: Assume inputs are pulled HIGH (INPUT_PULLUP), LOW when pressed.
-
-// Writes ONLY to the RELAY PCF8574 (0x24)
 void pcfWriteRelay(uint8_t pin, uint8_t value) {
     if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
-        pcf_relays.digitalWrite(pin, value); // Correct usage for xreef/PCF8574
+        pcf_relays.digitalWrite(pin, value);
         xSemaphoreGive(i2cMutex);
     } else {
         Serial.printf("ERROR: Failed to get I2C mutex for RELAY write on pin %d\n", pin);
     }
 }
 
-// Reads ONLY from the INPUT PCF8574 (0x22)
 uint8_t pcfReadInput(uint8_t pin) {
-    uint8_t value = HIGH; // Default to non-pressed state (HIGH due to pull-up)
+    uint8_t value = HIGH; // Default to not pressed
     if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
-        value = pcf_inputs.digitalRead(pin); // Correct usage for xreef/PCF8574
+        value = pcf_inputs.digitalRead(pin);
         xSemaphoreGive(i2cMutex);
     } else {
          Serial.printf("ERROR: Failed to get I2C mutex for INPUT read on pin %d\n", pin);
@@ -63,19 +63,18 @@ uint8_t pcfReadInput(uint8_t pin) {
     return value;
 }
 
-// Turns the specified relay OFF (using pcf_relays)
+// Helper function to stop a relay (set HIGH)
 void stopRelay(int relayPin) {
-    pcfWriteRelay(relayPin, HIGH); // HIGH turns OFF Active LOW relays
+    pcfWriteRelay(relayPin, HIGH);
 }
 
-// Turns the specified relay ON (using pcf_relays)
+// Helper function to start a relay (set LOW)
 void startRelay(int relayPin) {
-    pcfWriteRelay(relayPin, LOW); // LOW turns ON Active LOW relays
+    pcfWriteRelay(relayPin, LOW);
 }
 
-// Checks if the specified input pin is LOW (pressed) (using pcf_inputs)
+// Helper function to check if an input is pressed (LOW)
 bool isInputPressed(int inputPin) {
-    // Read the input value and check if it's LOW
     return (pcfReadInput(inputPin) == LOW);
 }
 
@@ -84,18 +83,29 @@ void MotorTask(void* pvParameters) {
     MotorTaskData* data = (MotorTaskData*) pvParameters;
     int pairIdx = data->pairIndex;
 
-    Serial.printf("Motor Task %d: Started for Relays [%d,%d] (on 0x%02X), Inputs [%d,%d] (on 0x%02X)\n",
-                  pairIdx, data->relayA, data->relayB, PCF_ADDRESS_RELAYS,
-                  data->inputA, data->inputB, PCF_ADDRESS_INPUTS);
+    Serial.printf("Motor Task %d: Started for Relays [%d,%d], Inputs [%d,%d]\n",
+                  pairIdx, data->relayA, data->relayB, data->inputA, data->inputB);
 
-    // Initial state (activeRelayA = true) is set in setup() before task creation
+    // Initial state: Assume Relay A should be activated first.
+    data->activeRelayA = true;
 
     while (true) {
+        // --- Check if sequence is enabled ---
+        if (!sequenceEnabled) {
+            // Ensure relays for this pair are OFF if sequence is disabled
+            stopRelay(data->relayA);
+            stopRelay(data->relayB);
+            // Wait and check again
+            vTaskDelay(pdMS_TO_TICKS(500)); // Check enabled status periodically
+            continue; // Skip the rest of the loop if not enabled
+        }
+
+        // --- Sequence is Enabled ---
         int currentRelay;
         int oppositeRelay;
         int currentInput;
 
-        // Determine which relay/input pair is currently active based on task data
+        // Determine which relay/input pair should be active based on task data
         if (data->activeRelayA) {
             currentRelay = data->relayA;
             oppositeRelay = data->relayB;
@@ -106,107 +116,114 @@ void MotorTask(void* pvParameters) {
             currentInput = data->inputB;
         }
 
-        // The relay (currentRelay) should already be ON from the previous iteration or setup.
-        Serial.printf("Task %d: Relay %d ON. Waiting for Input %d (Pin %d on 0x%02X)...\n",
-                      pairIdx, currentRelay, (data->activeRelayA ? 'A' : 'B'), currentInput, PCF_ADDRESS_INPUTS);
+        // --- Activate the current relay ---
+        // Ensure the opposite is off before turning the current one on
+        stopRelay(oppositeRelay);
+        startRelay(currentRelay);
+        Serial.printf("Task %d: Relay %c (Pin %d) ON. Waiting for Input %c (Pin %d)...\n",
+                      pairIdx, (data->activeRelayA ? 'A' : 'B'), currentRelay,
+                      (data->activeRelayA ? 'A' : 'B'), currentInput);
 
         // 1. Wait for the corresponding input to be pressed (go LOW)
         while (!isInputPressed(currentInput)) {
+            // Also check if sequence got disabled while waiting
+            if (!sequenceEnabled) {
+                stopRelay(currentRelay); // Turn off relay if disabled mid-wait
+                Serial.printf("Task %d: Sequence disabled while waiting for input %c.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'));
+                continue; // Restart the loop to check the flag
+            }
             vTaskDelay(pdMS_TO_TICKS(50)); // Check every 50ms, yield CPU
         }
-        Serial.printf("Task %d: Input %d (Pin %d) PRESSED.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'), currentInput);
+        Serial.printf("Task %d: Input %c (Pin %d) PRESSED.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'), currentInput);
 
         // 2. Stop the current relay
         stopRelay(currentRelay);
-        Serial.printf("Task %d: Relay %d (Pin %d) OFF.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'), currentRelay);
+        Serial.printf("Task %d: Relay %c (Pin %d) OFF.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'), currentRelay);
 
-        // 3. Wait for a random delay
+        // 3. Wait for a random delay using global constants
         int delayMs = random(MIN_DELAY_MS, MAX_DELAY_MS + 1);
         Serial.printf("Task %d: Delaying for %d ms...\n", pairIdx, delayMs);
-        vTaskDelay(pdMS_TO_TICKS(delayMs));
 
-        // 4. Switch direction state for the next iteration
-        data->activeRelayA = !data->activeRelayA;
+        // Check enabled flag periodically during the delay
+        TickType_t delayTicks = pdMS_TO_TICKS(delayMs);
+        TickType_t startTick = xTaskGetTickCount();
+        bool delayInterrupted = false; // Flag to check if delay was cut short
+        while ((xTaskGetTickCount() - startTick) < delayTicks) {
+            if (!sequenceEnabled) {
+                Serial.printf("Task %d: Sequence disabled during delay.\n", pairIdx);
+                delayInterrupted = true;
+                break; // Exit the delay loop
+            }
+            vTaskDelay(pdMS_TO_TICKS(50)); // Check flag roughly every 50ms
+        }
 
-        // Determine the *next* relay to activate based on the new state
-        int nextRelay = data->activeRelayA ? data->relayA : data->relayB;
-        int nextOpposite = data->activeRelayA ? data->relayB : data->relayA;
-
-        // 5. Activate the *next* relay
-        stopRelay(nextOpposite); // Ensure the one that just turned off stays off (or was already off)
-        startRelay(nextRelay);   // Turn on the next relay in the sequence
-        Serial.printf("Task %d: Switched. Relay %d (Pin %d) ON for next cycle.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'), nextRelay);
+        Serial.printf("Task %d: Switched direction. Next relay will be %c.\n", pairIdx, (data->activeRelayA ? 'A' : 'B'));
         Serial.println("----------------------------------------");
 
     } // End while(true) loop
-}
+} // End MotorTask function
 
 // --- Setup Function ---
 void setup() {
     Serial.begin(115200);
-    while (!Serial); // Wait for serial connection (optional)
-    randomSeed(analogRead(0)); // Seed random number generator early
-    Serial.println("\n\nESP32 Motor Logic Test (Dual PCF8574) Starting...");
+    while (!Serial); // Wait for serial connection
+    randomSeed(analogRead(0)); // Seed random number generator
+    Serial.println("\n\nESP32 Motor Logic (No Web Server) Starting...");
 
-    // --- Initialize I2C ---
-    Wire.begin(); // Initialize I2C bus (SDA, SCL default pins)
-
-    // --- Initialize BOTH PCF8574 chips ---
-    pcf_relays.begin(); // Initialize relay expander
-    pcf_inputs.begin(); // Initialize input expander
-
-    // Check connections using Wire library communication check
-    Wire.beginTransmission(PCF_ADDRESS_RELAYS);
-    byte error_relays = Wire.endTransmission();
-    bool relayPcfOk = (error_relays == 0);
-
-    Wire.beginTransmission(PCF_ADDRESS_INPUTS);
-    byte error_inputs = Wire.endTransmission();
-    bool inputPcfOk = (error_inputs == 0);
-
-    Serial.printf("Relay PCF8574 (0x%02X) responded: %s (Error Code: %d)\n", PCF_ADDRESS_RELAYS, relayPcfOk ? "YES" : "NO", error_relays);
-    Serial.printf("Input PCF8574 (0x%02X) responded: %s (Error Code: %d)\n", PCF_ADDRESS_INPUTS, inputPcfOk ? "YES" : "NO", error_inputs);
-
-    // Halt if any PCF chip did not respond
-    if (!relayPcfOk || !inputPcfOk) {
-        Serial.println("FATAL: Halting due to non-responsive PCF chip(s). Check wiring & addresses.");
-        while(1) { vTaskDelay(portMAX_DELAY); } // Halt execution indefinitely
+    // --- Initialize I2C Bus ---
+    Serial.printf("Initializing I2C on SDA=%d, SCL=%d... ", I2C_SDA_PIN, I2C_SCL_PIN);
+    bool wireOk = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    if (!wireOk) {
+        Serial.println("Failed!");
+        Serial.println("FATAL: Wire.begin() failed. Check I2C pins? Halting.");
+        while(1) { vTaskDelay(portMAX_DELAY); }
     }
+    Serial.println("OK");
 
     // --- Create I2C Mutex ---
     i2cMutex = xSemaphoreCreateMutex();
     if (i2cMutex == NULL) {
-        Serial.println("FATAL: Failed to create I2C Mutex!");
-        while(1) { vTaskDelay(portMAX_DELAY); } // Halt
+        Serial.println("FATAL: Failed to create I2C Mutex! Halting.");
+        while(1) { vTaskDelay(portMAX_DELAY); }
     }
     Serial.println("I2C Mutex Created.");
 
-    // Configure PCF pins *after* creating mutex and confirming connection
-    Serial.println("Configuring PCF8574 Pins...");
-    for (int i = 0; i < PAIR_COUNT * 2; i++) {
-        // Configure relay pins on the RELAY PCF (0x24)
-        pcf_relays.pinMode(RELAY_PINS[i], OUTPUT); // Set pin as OUTPUT
-        pcfWriteRelay(RELAY_PINS[i], HIGH);       // Initialize relay to OFF (Active LOW)
-
-        // Configure input pins on the INPUT PCF (0x22)
-        pcf_inputs.pinMode(INPUT_PINS[i], INPUT_PULLUP); // Set pin as INPUT with pull-up
+    // --- Configure PCF Pins (BEFORE begin()) ---
+    Serial.print("Configuring PCF8574 Pins... ");
+    if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
+        // Configure all relay pins as OUTPUT and set HIGH (OFF)
+        for (int i = 0; i < PAIR_COUNT * 2; i++) {
+            pcf_relays.pinMode(RELAY_PINS[i], OUTPUT);
+            pcf_relays.digitalWrite(RELAY_PINS[i], HIGH); // Initialize OFF
+        }
+        // Configure all input pins as INPUT
+        for (int i = 0; i < PAIR_COUNT * 2; i++) {
+            pcf_inputs.pinMode(INPUT_PINS[i], INPUT); // Use INPUT, ensure external pullups if needed
+        }
+        xSemaphoreGive(i2cMutex);
+        Serial.println("OK (Relays OFF, Inputs as INPUT)");
+    } else {
+        Serial.println("Failed!");
+        Serial.println("FATAL: Failed to get I2C mutex for pin configuration! Halting.");
+        while(1) { vTaskDelay(portMAX_DELAY); }
     }
-     Serial.println("PCF8574 Pins Configured.");
 
-    // --- Start Initial Relays Immediately ---
-    Serial.println("Starting initial relays (Motor A for each pair)...");
-    for (int i = 0; i < PAIR_COUNT; i++) {
-        int relayA = RELAY_PINS[i * 2];
-        int relayB = RELAY_PINS[i * 2 + 1];
-        // Ensure B is OFF first (redundant given initialization, but safe)
-        pcfWriteRelay(relayB, HIGH);
-        // Turn A ON
-        pcfWriteRelay(relayA, LOW);
-        Serial.printf("  Pair %d: Relay A (Pin %d) turned ON.\n", i, relayA);
+    // --- Initialize PCF8574 Chips (AFTER pin config) ---
+    Serial.print("Initializing PCF8574 chips... ");
+    bool relayPcfOk = pcf_relays.begin();
+    bool inputPcfOk = pcf_inputs.begin();
+    if (!relayPcfOk || !inputPcfOk) {
+         Serial.println("Failed!");
+         Serial.printf(" Relay PCF (0x%02X): %s\n", PCF_ADDRESS_RELAYS, relayPcfOk ? "OK" : "FAILED");
+         Serial.printf(" Input PCF (0x%02X): %s\n", PCF_ADDRESS_INPUTS, inputPcfOk ? "OK" : "FAILED");
+         Serial.println("FATAL: Halting due to failed PCF chip initialization.");
+         Serial.println("Check: Wiring, I2C Addresses, Pull-up Resistors.");
+         while(1) { vTaskDelay(portMAX_DELAY); }
     }
-    Serial.println("Initial relays started.");
-    // --- End Start Initial Relays ---
+     Serial.println("OK");
 
+    // --- Relays are initialized OFF. Tasks will control activation. ---
+    Serial.println("Relays initialized OFF.");
 
     // --- Create Motor Tasks ---
     Serial.println("Creating motor tasks...");
@@ -217,20 +234,19 @@ void setup() {
         motorTaskData[i].relayB = RELAY_PINS[i * 2 + 1];
         motorTaskData[i].inputA = INPUT_PINS[i * 2];
         motorTaskData[i].inputB = INPUT_PINS[i * 2 + 1];
-        motorTaskData[i].activeRelayA = true; // Reflects the initial state set above
+        // activeRelayA will be set to true inside the task initially
 
         char taskName[20];
         snprintf(taskName, sizeof(taskName), "MotorTask%d", i);
 
-        // Create the task
         BaseType_t taskCreated = xTaskCreatePinnedToCore(
             MotorTask,        // Task function
             taskName,         // Task name
-            4096,             // Stack size (consider increasing if complex operations are added)
+            4096,             // Stack size
             &motorTaskData[i], // Task parameter
-            1,                // Task priority (1 is low)
-            NULL,             // Task handle (not stored)
-            i % 2             // Core pinning (alternates between 0 and 1)
+            1,                // Task priority
+            NULL,             // Task handle
+            i % 2             // Core pinning
         );
 
         if (taskCreated != pdPASS) {
@@ -241,14 +257,34 @@ void setup() {
         }
     }
 
-    Serial.println("\nSetup complete. All motor tasks running.");
-    Serial.println("Monitor the output below. Press the corresponding input button to trigger state changes.");
+    Serial.println("\nSetup complete. All motor tasks created.");
+    Serial.println("Tasks will now activate relays and wait for inputs.");
     Serial.println("========================================");
 }
 
-// --- Loop Function (Unused with FreeRTOS) ---
+// --- Loop Function (Example: Enable sequence via Serial) ---
 void loop() {
-    // The main logic runs in FreeRTOS tasks, so this loop is not used.
-    // Sleep indefinitely to yield CPU time to other tasks.
-    vTaskDelay(portMAX_DELAY);
+    // Example: Check Serial input to enable/disable the sequence
+    if (Serial.available() > 0) {
+        char command = Serial.read();
+        if (command == 's' || command == 'S') {
+            if (!sequenceEnabled) {
+                Serial.println("COMMAND: Enabling sequence!");
+                sequenceEnabled = true;
+            } else {
+                 Serial.println("COMMAND: Sequence already enabled.");
+            }
+        } else if (command == 'x' || command == 'X') {
+             if (sequenceEnabled) {
+                Serial.println("COMMAND: Disabling sequence!");
+                sequenceEnabled = false;
+                // Tasks will stop themselves and turn off relays
+            } else {
+                 Serial.println("COMMAND: Sequence already disabled.");
+            }
+        }
+    }
+
+    // The main loop doesn't need to do much else with FreeRTOS
+    vTaskDelay(pdMS_TO_TICKS(100)); // Small delay
 }

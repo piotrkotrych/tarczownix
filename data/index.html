@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarczownix Control</title>
+    <link rel="stylesheet" href="pico.cyan.min.css">
+    <style>
+        body { padding: 20px; }
+        .status-indicator { display: inline-block; width: 15px; height: 15px; border-radius: 50%; margin-left: 10px; }
+        .status-on { background-color: limegreen; }
+        .status-off { background-color: red; }
+        .status-unknown { background-color: grey; }
+        .pair-card { margin-bottom: 20px; }
+        label { margin-bottom: 0.5rem; display: block;}
+        input[type=number] { margin-bottom: 1rem; }
+        .grid { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>Tarczownix Control</h1>
+
+        <article>
+            <header>
+                <h2>System Status</h2>
+            </header>
+            <p>
+                Sequence Running: <strong id="system-running">Unknown</strong>
+                <span id="system-indicator" class="status-indicator status-unknown"></span>
+            </p>
+            <div class="grid">
+                <button id="start-btn">Start Sequence</button>
+                <button id="stop-btn" class="secondary">Stop Sequence</button>
+            </div>
+        </article>
+
+        <article>
+             <header><h2>Live State</h2></header>
+             <div id="live-state" class="grid">
+                 <!-- Pair states will be loaded here -->
+                 Loading state...
+             </div>
+        </article>
+
+        <article>
+            <header>
+                <h2>Delay Configuration (ms)</h2>
+            </header>
+            <form id="delay-form">
+                <div id="delay-inputs" class="grid">
+                    <!-- Delay inputs will be loaded here -->
+                     Loading config...
+                </div>
+                <div class="grid">
+                    <button type="submit">Save Delays</button>
+                    <button type="button" id="load-btn" class="secondary">Load Saved Delays</button>
+                </div>
+            </form>
+             <p><small>Note: Delays are applied after the corresponding input is triggered.</small></p>
+        </article>
+
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
