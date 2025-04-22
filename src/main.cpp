@@ -215,6 +215,9 @@ void setup() {
     server.onNotFound([](AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Not Found");
     });
+    server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
+      request->send(200, "application/json", "{\"ok\":true}");
+    });
     server.begin();
     Serial.println("Web Server initialized.");
     Serial.println("========================================");
