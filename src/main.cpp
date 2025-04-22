@@ -6,6 +6,8 @@
 #include <freertos/semphr.h>
 #include <stdlib.h>    // Required for random()
 #include <WiFi.h> // Add this at the top of your file
+#include <SPIFFS.h>
+#include <ESPAsyncWebServer.h>
 
 // --- Hardware Configuration ---
 #define PCF_ADDRESS_RELAYS 0x24 // I2C Address for the RELAY PCF8574
@@ -51,6 +53,9 @@ const char* ap_password = "password";
 IPAddress apIP(192, 168, 1, 111);
 IPAddress gateway(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
+
+// --- Web Server Configuration ---
+AsyncWebServer server(80);
 
 // --- Thread-Safe PCF8574 Functions ---
 void pcfWriteRelay(uint8_t pin, uint8_t value) {
@@ -180,6 +185,9 @@ void setup() {
     randomSeed(analogRead(0)); // Seed random number generator
     Serial.println("\n\nESP32 Motor Logic (No Web Server) Starting...");
 
+    Serial.println("========================================");
+    Serial.println("Initializing WiFi Access Point...");
+
     // --- WiFi Access Point Setup with Static IP ---
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(apIP, gateway, subnet);
@@ -189,6 +197,27 @@ void setup() {
     Serial.println("\" started.");
     Serial.print("AP IP address: ");
     Serial.println(WiFi.softAPIP());
+
+    Serial.println("========================================");
+
+    Serial.println("Initializing SPIFFS...");
+    if (!SPIFFS.begin(true)) {
+        Serial.println("ERROR: Failed to mount SPIFFS! Halting.");
+        while(1) { vTaskDelay(portMAX_DELAY); }
+    } else {
+        Serial.println("SPIFFS mounted successfully.");
+    }
+    Serial.println("========================================");
+
+    Serial.println("Initializing Web Server...");
+    // Initialize the web server here if needed
+    server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+    server.onNotFound([](AsyncWebServerRequest *request) {
+        request->send(404, "text/plain", "Not Found");
+    });
+    server.begin();
+    Serial.println("Web Server initialized.");
+    Serial.println("========================================");
 
     // --- Initialize I2C Bus ---
     Serial.printf("Initializing I2C on SDA=%d, SCL=%d... ", I2C_SDA_PIN, I2C_SCL_PIN);
@@ -279,6 +308,11 @@ void setup() {
 
     Serial.println("\nSetup complete. All motor tasks created.");
     Serial.println("Tasks will now activate relays and wait for inputs.");
+    Serial.println("========================================");
+
+    Serial.println("To enable/disable the sequence, use Serial commands:");
+    Serial.println("  's' or 'S' to enable the sequence.");
+    Serial.println("  'x' or 'X' to disable the sequence.");
     Serial.println("========================================");
 }
 
