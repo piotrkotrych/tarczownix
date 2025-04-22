@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include <stdlib.h>    // Required for random()
+#include <WiFi.h> // Add this at the top of your file
 
 // --- Hardware Configuration ---
 #define PCF_ADDRESS_RELAYS 0x24 // I2C Address for the RELAY PCF8574
@@ -41,6 +42,15 @@ struct MotorTaskData {
 
 // Global array to hold runtime data for all pairs
 MotorTaskData motorTaskData[PAIR_COUNT];
+
+// --- WiFi Access Point Configuration ---
+const char* ap_ssid = "Tarczownix";
+const char* ap_password = "password";
+
+// Static IP configuration
+IPAddress apIP(192, 168, 1, 111);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 // --- Thread-Safe PCF8574 Functions ---
 void pcfWriteRelay(uint8_t pin, uint8_t value) {
@@ -169,6 +179,16 @@ void setup() {
     while (!Serial); // Wait for serial connection
     randomSeed(analogRead(0)); // Seed random number generator
     Serial.println("\n\nESP32 Motor Logic (No Web Server) Starting...");
+
+    // --- WiFi Access Point Setup with Static IP ---
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(apIP, gateway, subnet);
+    WiFi.softAP(ap_ssid, ap_password);
+    Serial.print("Access Point \"");
+    Serial.print(ap_ssid);
+    Serial.println("\" started.");
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
 
     // --- Initialize I2C Bus ---
     Serial.printf("Initializing I2C on SDA=%d, SCL=%d... ", I2C_SDA_PIN, I2C_SCL_PIN);
