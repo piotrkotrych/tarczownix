@@ -476,7 +476,14 @@ if(relays.digitalRead(1) == LOW){
 
 // Function to get a random delay in milliseconds for a specific relay
 int getRandomDelay(int relay) {
-  return random(minDelayRelay[relay], maxDelayRelay[relay]);
+    // Use ESP32's hardware random number generator
+    uint32_t randomValue = esp_random();
+    
+    // Scale it to your min/max range
+    int range = maxDelayRelay[relay] - minDelayRelay[relay];
+    int delay = minDelayRelay[relay] + (randomValue % range);
+    
+    return delay;
 }
 
 void saveRelayDelays() {
