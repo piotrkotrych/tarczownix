@@ -187,7 +187,9 @@ void setup() {
     html += "<div class='card'>";
     html += "<h2>Sequence Control</h2>";
     html += "<p>Click the button below to start the relay sequence:</p>";
-    html += "<a href='/start' class='btn'>Start Relay 0</a>";
+    html += "<a href='/start' class='btn'>Start Sequence</a>";
+    html += "<p>Click the button below to stop the relay sequence:</p>";
+    html += "<a href='/stop' class='btn' style='background-color:#e53935;'>Stop Sequence</a>";
     html += "<p>Current relay states:</p>";
     html += "<ul style='list-style-type:none; padding:0;'>";
     // relay states
@@ -248,6 +250,28 @@ void setup() {
     html += ".error { color: red; }";
     html += "</style></head><body>";
     html += "<h2 class='" + String(hasError ? "error" : "success") + "'>" + message + "</h2>";
+    html += "<p>Redirecting back to home page...</p>";
+    html += "</body></html>";
+
+    request->send(200, "text/html", html);
+  });
+
+  server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Turn off all relays
+    for (int i = 0; i < 6; i++) {
+      relays.digitalWrite(i, HIGH);
+    }
+    // Reset all sequence variables
+    z0 = z1 = z2 = z3 = z4 = z5 = false;
+    r0 = r1 = r2 = r3 = r4 = r5 = 0;
+
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta http-equiv='refresh' content='2;url=/' />";
+    html += "<title>Stop Sequence</title><style>";
+    html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
+    html += ".success { color: green; }";
+    html += "</style></head><body>";
+    html += "<h2 class='success'>Sequence stopped. All relays OFF and variables reset.</h2>";
     html += "<p>Redirecting back to home page...</p>";
     html += "</body></html>";
 
