@@ -3,7 +3,6 @@
 // #include <AsyncTCP.h>
 #include <WiFi.h>
 #include <WiFiAP.h>
-#include <stdlib.h>  // Required for random number generation
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 
@@ -44,6 +43,73 @@ AsyncWebServer server(80); // Create a web server on port 80
 int getRandomDelay(int relay);
 void saveRelayDelays();
 void loadRelayDelays();
+
+// Add these global variables at the top with your other variables
+unsigned long inputTimeoutStart[6] = {0}; // Track when each relay was turned on
+bool inputTimeoutActive[6] = {false};     // Track which relays are waiting for input
+String lastErrorMessage = "";             // Store last error for web display
+unsigned long lastErrorTime = 0;         // When the last error occurred
+
+// Function to start timeout monitoring for a specific relay
+void startInputTimeout(int relayNumber) {
+  inputTimeoutStart[relayNumber] = millis();
+  inputTimeoutActive[relayNumber] = true;
+  Serial.println("Started timeout monitoring for relay " + String(relayNumber));
+}
+
+// Function to stop timeout monitoring (call when input is detected)
+void stopInputTimeout(int relayNumber) {
+  inputTimeoutActive[relayNumber] = false;
+  Serial.println("Input detected for relay " + String(relayNumber) + " - timeout cleared");
+}
+
+// Function to check all active timeouts
+void checkInputTimeouts() {
+  unsigned long currentTime = millis();
+  
+  for (int i = 0; i < 6; i++) {
+    if (inputTimeoutActive[i]) {
+      // Check if 1 second has passed
+      if (currentTime - inputTimeoutStart[i] >= 1000) {
+        // Timeout occurred - turn off all relays
+        for (int j = 0; j < 6; j++) {
+          relays.digitalWrite(j, HIGH); // Turn off all relays
+        }
+        
+        // Reset all sequence variables
+        z0 = z1 = z2 = z3 = z4 = z5 = false;
+        r0 = r1 = r2 = r3 = r4 = r5 = 0;
+        
+        // Clear all timeout monitoring
+        for (int k = 0; k < 6; k++) {
+          inputTimeoutActive[k] = false;
+        }
+        
+        // Create error message
+        lastErrorMessage = "Relay " + String(i) + " did not reach input " + String(i) + " before one second";
+        lastErrorTime = currentTime;
+        
+        Serial.println("TIMEOUT ERROR: " + lastErrorMessage);
+        break; // Exit loop since we've handled the timeout
+      }
+    }
+  }
+}
+
+// Function to get last error for web display
+String getLastError() {
+  if (lastErrorTime > 0) {
+    unsigned long timeSinceError = (millis() - lastErrorTime) / 1000; // Convert to seconds
+    return lastErrorMessage + " (occurred " + String(timeSinceError) + " seconds ago)";
+  }
+  return "No recent errors";
+}
+
+// Function to clear error message
+void clearLastError() {
+  lastErrorMessage = "";
+  lastErrorTime = 0;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -92,8 +158,6 @@ void setup() {
   relays.digitalWrite(5, HIGH); // Set relay 5 to off
 
   Serial.println("Setup complete. Waiting for input...");
-
-  randomSeed(analogRead(0)); // Seed the random number generator
 
   // setup wifi access point
   WiFi.softAP(ssid, password);
@@ -219,6 +283,15 @@ void setup() {
       html += "</div>";
     }
 
+    // Add system status card
+    html += "<div class='card'>";
+    html += "<h2>System Status</h2>";
+    html += "<p><strong>Last Error:</strong> " + getLastError() + "</p>";
+    if (lastErrorTime > 0) {
+      html += "<a href='/clear-error' class='btn' style='background-color:#ff9800;'>Clear Error</a>";
+    }
+    html += "</div>";
+
     html += "</div>";
     html += "</body></html>";
 
@@ -226,35 +299,40 @@ void setup() {
   });
 
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String message;
-    bool hasError = false;
+  String message;
+  bool hasError = false;
 
-    // start relays 0, 2, 4 and check if they are not on
-    if (relays.digitalRead(0) == HIGH && relays.digitalRead(2) == HIGH && relays.digitalRead(4) == HIGH) {
-      relays.digitalWrite(0, LOW); // Set relay 0 to on
-      relays.digitalWrite(2, LOW); // Set relay 2 to on
-      relays.digitalWrite(4, LOW); // Set relay 4 to on
-      message = "Relay 0, 2, and 4 are now ON";
-    } else {
-      message = "Error: One or more relays are already ON";
-      hasError = true;
-    }
+  // Check if relays 0, 2, 4 are off before starting
+  if (relays.digitalRead(0) == HIGH && relays.digitalRead(2) == HIGH && relays.digitalRead(4) == HIGH) {
+    relays.digitalWrite(0, LOW); // Turn on relay 0
+    relays.digitalWrite(2, LOW); // Turn on relay 2  
+    relays.digitalWrite(4, LOW); // Turn on relay 4
+    
+    // Start timeout monitoring for the relays that are now on
+    startInputTimeout(0);
+    startInputTimeout(2);
+    startInputTimeout(4);
+    
+    message = "Relay 0, 2, and 4 are now ON";
+  } else {
+    message = "Error: One or more relays are already ON";
+    hasError = true;
+  }
 
+  // Return response with redirect
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<meta http-equiv='refresh' content='3;url=/' />"; 
+  html += "<title>Start sequences</title><style>";
+  html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
+  html += ".success { color: green; }";
+  html += ".error { color: red; }";
+  html += "</style></head><body>";
+  html += "<h2 class='" + String(hasError ? "error" : "success") + "'>" + message + "</h2>";
+  html += "<p>Redirecting back to home page...</p>";
+  html += "</body></html>";
 
-    // Return response with redirect
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<meta http-equiv='refresh' content='3;url=/' />"; // Redirect after 3 seconds
-    html += "<title>Start sequences</title><style>";
-    html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
-    html += ".success { color: green; }";
-    html += ".error { color: red; }";
-    html += "</style></head><body>";
-    html += "<h2 class='" + String(hasError ? "error" : "success") + "'>" + message + "</h2>";
-    html += "<p>Redirecting back to home page...</p>";
-    html += "</body></html>";
-
-    request->send(200, "text/html", html);
-  });
+  request->send(200, "text/html", html);
+});
 
   server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
     // Turn off all relays
@@ -278,200 +356,140 @@ void setup() {
     request->send(200, "text/html", html);
   });
 
+  // Add this server endpoint in setup()
+  server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String json = "{";
+    json += "\"lastError\":\"" + getLastError() + "\",";
+    json += "\"relayStates\":[";
+    for (int i = 0; i < 6; i++) {
+      json += String(relays.digitalRead(i) == LOW ? 1 : 0);
+      if (i < 5) json += ",";
+    }
+    json += "]}";
+    
+    request->send(200, "application/json", json);
+  });
+
+  // Add endpoint to clear errors
+  server.on("/clear-error", HTTP_GET, [](AsyncWebServerRequest *request) {
+    clearLastError();
+    
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta http-equiv='refresh' content='2;url=/' />";
+    html += "<title>Error Cleared</title></head><body>";
+    html += "<h2>Error message cleared</h2>";
+    html += "<p>Redirecting back to home page...</p>";
+    html += "</body></html>";
+    
+    request->send(200, "text/html", html);
+  });
+
   server.begin(); // Start the server
 
   
 }
 
 void loop() {
-
-
-  if(relays.digitalRead(0) == LOW){
-        Serial.println("Relay 0 is ON");
-  }
+  // Check for timeouts first
+  checkInputTimeouts();
   
-    if(inputs.digitalRead(0) == LOW && !z0 && relays.digitalRead(0) == LOW) {
-      Serial.println("Input 0 is LOW, turning off relay 0");
-      relays.digitalWrite(0, HIGH); // Set relay 0 to off
-      r0 = millis();
-      z0 = true;
-      delay(10); // Wait for 1 second before checking again
-    }
-  if (z0 == true && millis() - r0 >=(getRandomDelay(0))){
-    relays.digitalWrite(1, LOW);
+  // Relay 0 logic
+  if(inputs.digitalRead(0) == LOW && !z0 && relays.digitalRead(0) == LOW) {
+    stopInputTimeout(0); // Clear timeout since input was detected
+    Serial.println("Input 0 is LOW, turning off relay 0");
+    relays.digitalWrite(0, HIGH); // Set relay 0 to off
+    r0 = millis();
+    z0 = true;
+    delay(10);
+  }
+  if (z0 == true && millis() - r0 >= getRandomDelay(0)) {
+    relays.digitalWrite(1, LOW); // Turn on relay 1
+    startInputTimeout(1); // Start monitoring for input on relay 1
     z0 = false;
-    delay(10); // Wait for 1 second before checking again
+    delay(10);
   }
 
-  //////////////////////////////
-
-if(relays.digitalRead(1) == LOW){
-        Serial.println("Relay 1 is ON");
-}
-    if(inputs.digitalRead(1) == LOW && !z1 && relays.digitalRead(1) == LOW) {
-      Serial.println("Input 1 is LOW, turning off relay 1");
-      relays.digitalWrite(1, HIGH); // Set relay 1 to off
-      r1 = millis();
-      z1 = true;
-      delay(10); // Wait for 1 second before checking again
-    }
-  if (z1 == true && millis() - r1 >=(getRandomDelay(1))){
-    relays.digitalWrite(0, LOW);
+  // Relay 1 logic
+  if(inputs.digitalRead(1) == LOW && !z1 && relays.digitalRead(1) == LOW) {
+    stopInputTimeout(1); // Clear timeout since input was detected
+    Serial.println("Input 1 is LOW, turning off relay 1");
+    relays.digitalWrite(1, HIGH); // Set relay 1 to off
+    r1 = millis();
+    z1 = true;
+    delay(10);
+  }
+  if (z1 == true && millis() - r1 >= getRandomDelay(1)) {
+    relays.digitalWrite(0, LOW); // Turn on relay 0
+    startInputTimeout(0); // Start monitoring for input on relay 0
     z1 = false;
-    delay(10); // Wait for 1 second before checking again
+    delay(10);
   }
 
- // if(relays.digitalRead(0) == LOW) {
- //   Serial.println("Relay 0 is ON");
- //   if(inputs.digitalRead(0) == LOW) {
- //     Serial.println("Input 0 is LOW, turning off relay 0");
- //     relays.digitalWrite(0, HIGH); // Set relay 0 to off
- //     delay(getRandomDelay(0)); // Add random delay before next action
- //     relays.digitalWrite(1, LOW); // Set relay 1 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
-
- // if(relays.digitalRead(1) == LOW) {
- //   Serial.println("Relay 1 is ON");
- //   if(inputs.digitalRead(1) == LOW) {
- //     Serial.println("Input 1 is LOW, turning off relay 1");
- //     relays.digitalWrite(1, HIGH); // Set relay 1 to off
- //     delay(getRandomDelay(1)); // Add random delay before next action
- //     relays.digitalWrite(0, LOW); // Set relay 0 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
-
-
- ////////////////////////////////////////////////////////////////
-
-  if(relays.digitalRead(2) == LOW){
-        Serial.println("Relay 2 is ON");
+  // Relay 2 logic
+  if(inputs.digitalRead(2) == LOW && !z2 && relays.digitalRead(2) == LOW) {
+    stopInputTimeout(2); // Clear timeout since input was detected
+    Serial.println("Input 2 is LOW, turning off relay 2");
+    relays.digitalWrite(2, HIGH); // Set relay 2 to off
+    r2 = millis();
+    z2 = true;
+    delay(10);
   }
-  
-    if(inputs.digitalRead(2) == LOW && !z2 && relays.digitalRead(2) == LOW) {
-      Serial.println("Input 2 is LOW, turning off relay 2");
-      relays.digitalWrite(2, HIGH); // Set relay 2 to off
-      r2 = millis();
-      z2 = true;
-      delay(10); // Wait for 1 second before checking again
-    }
-  if (z2 == true && millis() - r2 >=(getRandomDelay(2))){
-    relays.digitalWrite(3, LOW);
+  if (z2 == true && millis() - r2 >= getRandomDelay(2)) {
+    relays.digitalWrite(3, LOW); // Turn on relay 3
+    startInputTimeout(3); // Start monitoring for input on relay 3
     z2 = false;
-    delay(10); // Wait for 1 second before checking again
+    delay(10);
   }
 
-  //////////////////////////////
-
- if(relays.digitalRead(3) == LOW){
-       Serial.println("Relay 3 is ON");
- }
-    if(inputs.digitalRead(3) == LOW && !z3 && relays.digitalRead(3) == LOW) {
-      Serial.println("Input 3 is LOW, turning off relay 3");
-      relays.digitalWrite(3, HIGH); // Set relay 3 to off
-      r3 = millis();
-      z3 = true;
-      delay(10); // Wait for 1 second before checking again
-    }
-  if (z3 == true && millis() - r3 >=(getRandomDelay(3))){
-    relays.digitalWrite(2, LOW);
+  // Relay 3 logic
+  if(inputs.digitalRead(3) == LOW && !z3 && relays.digitalRead(3) == LOW) {
+    stopInputTimeout(3); // Clear timeout since input was detected
+    Serial.println("Input 3 is LOW, turning off relay 3");
+    relays.digitalWrite(3, HIGH); // Set relay 3 to off
+    r3 = millis();
+    z3 = true;
+    delay(10);
+  }
+  if (z3 == true && millis() - r3 >= getRandomDelay(3)) {
+    relays.digitalWrite(2, LOW); // Turn on relay 2
+    startInputTimeout(2); // Start monitoring for input on relay 2
     z3 = false;
-    delay(10); // Wait for 1 second before checking again
+    delay(10);
   }
 
+  // Relay 4 logic
+  if(inputs.digitalRead(4) == LOW && !z4 && relays.digitalRead(4) == LOW) {
+    stopInputTimeout(4); // Clear timeout since input was detected
+    Serial.println("Input 4 is LOW, turning off relay 4");
+    relays.digitalWrite(4, HIGH); // Set relay 4 to off
+    r4 = millis();
+    z4 = true;
+    delay(10);
+  }
+  if (z4 == true && millis() - r4 >= getRandomDelay(4)) {
+    relays.digitalWrite(5, LOW); // Turn on relay 5
+    startInputTimeout(5); // Start monitoring for input on relay 5
+    z4 = false;
+    delay(10);
+  }
 
-////////////////////////////////////////////////
-
- // if(relays.digitalRead(2) == LOW) {
- //   Serial.println("Relay 2 is ON");
- //   if(inputs.digitalRead(2) == LOW) {
- //     Serial.println("Input 2 is LOW, turning off relay 2");
- //     relays.digitalWrite(2, HIGH); // Set relay 2 to off
- //     delay(getRandomDelay(2)); // Add random delay before next action
- //     relays.digitalWrite(3, LOW); // Set relay 3 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
- //  if(relays.digitalRead(3) == LOW) {
- //   Serial.println("Relay 3 is ON");
- //   if(inputs.digitalRead(3) == LOW) {
- //     Serial.println("Input 3 is LOW, turning off relay 3");
- //     relays.digitalWrite(3, HIGH); // Set relay 3 to off
- //     delay(getRandomDelay(3)); // Add random delay before next action
- //     relays.digitalWrite(2, LOW); // Set relay 2 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
-
-//////////////////////////////////////////////////////////////////////////
-
-  if(relays.digitalRead(4) == LOW){
-        Serial.println("Relay 4 is ON");
-    
-    if(inputs.digitalRead(4) == LOW && !z4 && relays.digitalRead(4) == LOW) {
-      Serial.println("Input 4 is LOW, turning off relay 4");
-      relays.digitalWrite(4, HIGH); // Set relay 4 to off
-      r4 = millis();
-      z4 = true;
-    }
-      delay(10); // Wait for 1 second before checking again
-    }
-    if (z4 == true &&millis() - r4 >= (getRandomDelay(4))){
-      relays.digitalWrite(5, LOW);
-      z4 = false;
-    }
-      delay(10); // Wait for 1 second before checking again
-    
-
-  //////////////////////////////
-
- if(relays.digitalRead(5) == LOW){
-       Serial.println("Relay 5 is ON");
- 
-    if(inputs.digitalRead(5) == LOW && !z5 && relays.digitalRead(5) == LOW) {
-      Serial.println("Input 5 is LOW, turning off relay 5");
-      relays.digitalWrite(5, HIGH); // Set relay 5 to off
-      r5 = millis();
-      z5 = true;
-    }
-      delay(10); // Wait for 1 second before checking again
-    }
-  if (z5 == true && millis() - r5 >= (getRandomDelay(5))){
-    relays.digitalWrite(4, LOW);
+  // Relay 5 logic
+  if(inputs.digitalRead(5) == LOW && !z5 && relays.digitalRead(5) == LOW) {
+    stopInputTimeout(5); // Clear timeout since input was detected
+    Serial.println("Input 5 is LOW, turning off relay 5");
+    relays.digitalWrite(5, HIGH); // Set relay 5 to off
+    r5 = millis();
+    z5 = true;
+    delay(10);
+  }
+  if (z5 == true && millis() - r5 >= getRandomDelay(5)) {
+    relays.digitalWrite(4, LOW); // Turn on relay 4
+    startInputTimeout(4); // Start monitoring for input on relay 4
     z5 = false;
+    delay(10);
   }
-    delay(10); // Wait for 1 second before checking again
   
-
-//////////////////////////////////////////////////////////////////////////
-
-
- // if(relays.digitalRead(4) == LOW) {
- //   Serial.println("Relay 4 is ON");
- //   if(inputs.digitalRead(4) == LOW) {
- //     Serial.println("Input 4 is LOW, turning off relay 4");
- //     relays.digitalWrite(4, HIGH); // Set relay 4 to off
- //     delay(getRandomDelay(4)); // Add random delay before next action
- //     relays.digitalWrite(5, LOW); // Set relay 5 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
- // if(relays.digitalRead(5) == LOW) {
- //   Serial.println("Relay 5 is ON");
- //   if(inputs.digitalRead(5) == LOW) {
- //     Serial.println("Input 5 is LOW, turning off relay 5");
- //     relays.digitalWrite(5, HIGH); // Set relay 5 to off
- //     delay(getRandomDelay(5)); // Add random delay before next action
- //     relays.digitalWrite(4, LOW); // Set relay 4 to on
- //   }
- //   delay(10); // Wait for 1 second before checking again
- // }
-
-    delay(10); // Short delay to prevent CPU overuse
-  
-
+  delay(10);
 }
 
 // Function to get a random delay in milliseconds for a specific relay
