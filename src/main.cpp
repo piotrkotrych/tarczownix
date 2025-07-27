@@ -6,20 +6,23 @@
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 
-//zmienne do liczenia czasu
-unsigned long r0 = 0;
-unsigned long r1 = 0;
-unsigned long r2 = 0;
-unsigned long r3 = 0;
-unsigned long r4 = 0;
-unsigned long r5 = 0;
+// Motor control state structure for better organization
+struct MotorState {
+  unsigned long delayStartTime = 0;
+  bool waitingForInput = false;
+  bool isActive = false;
+};
 
-bool z0 = false;
-bool z1 = false;
-bool z2 = false;
-bool z3 = false;
-bool z4 = false;
-bool z5 = false;
+// Array of motor states for cleaner code
+MotorState motorStates[6];
+
+// System state tracking
+enum SystemState {
+  SYSTEM_STOPPED,
+  SYSTEM_RUNNING,
+  SYSTEM_ERROR
+};
+SystemState systemState = SYSTEM_STOPPED;
 
 // --- Hardware ---
 PCF8574 inputs(0x22, 4, 15);   // Input expander, address 0x22
@@ -50,6 +53,62 @@ bool inputTimeoutActive[6] = {false};     // Track which relays are waiting for 
 String lastErrorMessage = "";             // Store last error for web display
 unsigned long lastErrorTime = 0;         // When the last error occurred
 
+// Enhanced I2C communication with error checking
+bool safeRelayWrite(int pin, int value) {
+  bool success = relays.digitalWrite(pin, value);
+  if (!success) {
+    lastErrorMessage = "I2C communication error with relay " + String(pin);
+    lastErrorTime = millis();
+    Serial.println("ERROR: " + lastErrorMessage);
+    systemState = SYSTEM_ERROR;
+  }
+  return success;
+}
+
+bool safeInputRead(int pin) {
+  // Add debouncing for more reliable input reading
+  static unsigned long lastReadTime[6] = {0};
+  static bool lastState[6] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+  
+  unsigned long currentTime = millis();
+  if (currentTime - lastReadTime[pin] < 50) { // 50ms debounce
+    return lastState[pin];
+  }
+  
+  lastReadTime[pin] = currentTime;
+  bool currentState = inputs.digitalRead(pin);
+  
+  // Only update if state actually changed
+  if (currentState != lastState[pin]) {
+    lastState[pin] = currentState;
+    Serial.println("Input " + String(pin) + " state changed to " + (currentState ? "HIGH" : "LOW"));
+  }
+  
+  return currentState;
+}
+
+// Motor safety check - prevent both relays in a pair from being on simultaneously
+bool checkMotorSafety() {
+  for (int pair = 0; pair < 3; pair++) {
+    int relay1 = pair * 2;
+    int relay2 = pair * 2 + 1;
+    
+    if (relays.digitalRead(relay1) == LOW && relays.digitalRead(relay2) == LOW) {
+      lastErrorMessage = "SAFETY ERROR: Both relays " + String(relay1) + " and " + String(relay2) + " are ON simultaneously!";
+      lastErrorTime = millis();
+      Serial.println("CRITICAL ERROR: " + lastErrorMessage);
+      
+      // Emergency shutdown
+      for (int i = 0; i < 6; i++) {
+        relays.digitalWrite(i, HIGH);
+      }
+      systemState = SYSTEM_ERROR;
+      return false;
+    }
+  }
+  return true;
+}
+
 // Function to start timeout monitoring for a specific relay
 void startInputTimeout(int relayNumber) {
   inputTimeoutStart[relayNumber] = millis();
@@ -76,9 +135,12 @@ void checkInputTimeouts() {
           relays.digitalWrite(j, HIGH); // Turn off all relays
         }
         
-        // Reset all sequence variables
-        z0 = z1 = z2 = z3 = z4 = z5 = false;
-        r0 = r1 = r2 = r3 = r4 = r5 = 0;
+        // Reset all motor states
+        for (int j = 0; j < 6; j++) {
+          motorStates[j].waitingForInput = false;
+          motorStates[j].isActive = false;
+          motorStates[j].delayStartTime = 0;
+        }
         
         // Clear all timeout monitoring
         for (int k = 0; k < 6; k++) {
@@ -229,67 +291,101 @@ void setup() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<meta http-equiv='refresh' content='5' />"; // Auto refresh every 5 seconds
     html += "<title>TARCZOWNIX Control</title>";
     html += "<style>";
-    html += "body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }";
-    html += ".container { max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; }";
-    html += "h1 { color: #333; }";
+    html += "body { font-family: Arial, sans-serif; text-align: center; margin: 20px; background-color: #f5f5f5; }";
+    html += ".container { max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }";
+    html += "h1 { color: #333; margin-bottom: 30px; }";
     html += ".btn { background-color: #4CAF50; border: none; color: white; padding: 15px 32px; ";
     html += "text-align: center; text-decoration: none; display: inline-block; font-size: 16px; ";
-    html += "margin: 10px 2px; cursor: pointer; border-radius: 8px; }";
-    html += ".btn:hover { background-color: #45a049; }";
-    html += ".form-group { margin: 15px 0; }";
+    html += "margin: 10px 5px; cursor: pointer; border-radius: 8px; transition: all 0.3s ease; }";
+    html += ".btn:hover { background-color: #45a049; transform: translateY(-2px); }";
+    html += ".btn-stop { background-color: #f44336; }";
+    html += ".btn-stop:hover { background-color: #da190b; }";
+    html += ".btn-clear { background-color: #ff9800; }";
+    html += ".btn-clear:hover { background-color: #e68900; }";
+    html += ".form-group { margin: 15px 0; text-align: left; }";
     html += "input[type=number] { padding: 10px; width: 100px; border-radius: 4px; border: 1px solid #ccc; }";
-    html += "label { display: inline-block; width: 120px; text-align: right; margin-right: 10px; }";
-    html += ".card { border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin: 15px 0; background-color: #f9f9f9; }";
+    html += "label { display: inline-block; width: 120px; text-align: right; margin-right: 10px; font-weight: bold; }";
+    html += ".card { border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 20px 0; background-color: #f9f9f9; }";
+    html += ".status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }";
+    html += ".status-item { background-color: white; padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50; }";
+    html += ".status-on { border-left-color: #f44336; background-color: #ffe6e6; }";
+    html += ".status-off { border-left-color: #4CAF50; background-color: #e6ffe6; }";
+    html += ".motor-pair { background-color: #e3f2fd; border: 1px solid #1976d2; margin: 10px 0; padding: 15px; border-radius: 8px; }";
+    html += ".warning { color: #ff6b35; font-weight: bold; }";
+    html += ".success { color: #4CAF50; font-weight: bold; }";
+    html += ".relay-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }";
     html += "</style>";
     html += "</head><body>";
     html += "<div class='container'>";
-    html += "<h1>TARCZOWNIX Control</h1>";
+    html += "<h1>🏭 TARCZOWNIX Motor Control System</h1>";
 
-    // Relay control section
+    // System Status Overview
     html += "<div class='card'>";
-    html += "<h2>Sequence Control</h2>";
-    html += "<p>Click the button below to start the relay sequence:</p>";
-    html += "<a href='/start' class='btn'>Start Sequence</a>";
-    html += "<p>Click the button below to stop the relay sequence:</p>";
-    html += "<a href='/stop' class='btn' style='background-color:#e53935;'>Stop Sequence</a>";
-    html += "<p>Current relay states:</p>";
-    html += "<ul style='list-style-type:none; padding:0;'>";
-    // relay states
-    for (int i = 0; i < 6; i++) {
-      html += "<li>Relay " + String(i) + ": " + (relays.digitalRead(i) == LOW ? "ON" : "OFF") + "</li>";
+    html += "<h2>📊 System Status</h2>";
+    html += "<p><strong>System State:</strong> ";
+    switch(systemState) {
+      case SYSTEM_STOPPED: html += "<span style='color: #ff9800;'>STOPPED</span>"; break;
+      case SYSTEM_RUNNING: html += "<span style='color: #4CAF50;'>RUNNING</span>"; break;
+      case SYSTEM_ERROR: html += "<span style='color: #f44336;'>ERROR</span>"; break;
     }
-    html += "</ul>";
+    html += "</p>";
+    html += "<p><strong>Last Error:</strong> " + getLastError() + "</p>";
+    if (lastErrorTime > 0) {
+      html += "<a href='/clear-error' class='btn btn-clear'>Clear Error</a>";
+    }
     html += "</div>";
 
-    // Delay configuration section for each relay
+    // Relay control section with better visualization
+    html += "<div class='card'>";
+    html += "<h2>🎮 Sequence Control</h2>";
+    html += "<a href='/start' class='btn'>▶️ Start Sequence</a>";
+    html += "<a href='/stop' class='btn btn-stop'>⏹️ Stop Sequence</a>";
+    
+    // Motor Pair Status
+    html += "<h3>🏭 Motor Pair Status</h3>";
+    for (int pair = 0; pair < 3; pair++) {
+      int relay1 = pair * 2;
+      int relay2 = pair * 2 + 1;
+      html += "<div class='motor-pair'>";
+      html += "<h4>Motor Pair " + String(pair + 1) + " (Relays " + String(relay1) + " & " + String(relay2) + ")</h4>";
+      html += "<div style='display: flex; justify-content: space-around;'>";
+      html += "<div class='status-item " + String(relays.digitalRead(relay1) == LOW ? "status-on" : "status-off") + "'>";
+      html += "Relay " + String(relay1) + ": " + (relays.digitalRead(relay1) == LOW ? "🟢 ON" : "🔴 OFF");
+      html += "</div>";
+      html += "<div class='status-item " + String(relays.digitalRead(relay2) == LOW ? "status-on" : "status-off") + "'>";
+      html += "Relay " + String(relay2) + ": " + (relays.digitalRead(relay2) == LOW ? "🟢 ON" : "🔴 OFF");
+      html += "</div>";
+      html += "</div>";
+      html += "</div>";
+    }
+    html += "</div>";
+
+    // Enhanced delay configuration
+    html += "<div class='card'>";
+    html += "<h2>⚙️ Delay Configuration</h2>";
+    html += "<div class='relay-config'>";
     for (int i = 0; i < 6; i++) {
-      html += "<div class='card'>";
-      html += "<h2>Relay " + String(i) + " Delay Configuration</h2>";
+      html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
+      html += "<h3>Relay " + String(i) + "</h3>";
       html += "<form action='/set-delay' method='get'>";
       html += "<input type='hidden' name='relay' value='" + String(i) + "'>";
       html += "<div class='form-group'>";
-      html += "<label for='min'>Min Delay:</label>";
+      html += "<label for='min'>Min Delay (ms):</label>";
       html += "<input type='number' id='min' name='min' min='100' max='10000' value='" + String(minDelayRelay[i]) + "' required>";
       html += "</div>";
       html += "<div class='form-group'>";
-      html += "<label for='max'>Max Delay:</label>";
+      html += "<label for='max'>Max Delay (ms):</label>";
       html += "<input type='number' id='max' name='max' min='100' max='20000' value='" + String(maxDelayRelay[i]) + "' required>";
       html += "</div>";
-      html += "<input type='submit' class='btn' value='Save Settings'>";
+      html += "<input type='submit' class='btn' value='💾 Save Settings' style='width: 100%;'>";
       html += "</form>";
-      html += "<p>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</p>";
+      html += "<p><small>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</small></p>";
       html += "</div>";
     }
-
-    // Add system status card
-    html += "<div class='card'>";
-    html += "<h2>System Status</h2>";
-    html += "<p><strong>Last Error:</strong> " + getLastError() + "</p>";
-    if (lastErrorTime > 0) {
-      html += "<a href='/clear-error' class='btn' style='background-color:#ff9800;'>Clear Error</a>";
-    }
+    html += "</div>";
     html += "</div>";
 
     html += "</div>";
@@ -339,9 +435,13 @@ void setup() {
     for (int i = 0; i < 6; i++) {
       relays.digitalWrite(i, HIGH);
     }
-    // Reset all sequence variables
-    z0 = z1 = z2 = z3 = z4 = z5 = false;
-    r0 = r1 = r2 = r3 = r4 = r5 = 0;
+    // Reset all motor states
+    for (int i = 0; i < 6; i++) {
+      motorStates[i].waitingForInput = false;
+      motorStates[i].isActive = false; 
+      motorStates[i].delayStartTime = 0;
+    }
+    systemState = SYSTEM_STOPPED;
 
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta http-equiv='refresh' content='2;url=/' />";
@@ -359,10 +459,38 @@ void setup() {
   // Add this server endpoint in setup()
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     String json = "{";
+    json += "\"systemState\":" + String((int)systemState) + ",";
     json += "\"lastError\":\"" + getLastError() + "\",";
     json += "\"relayStates\":[";
     for (int i = 0; i < 6; i++) {
       json += String(relays.digitalRead(i) == LOW ? 1 : 0);
+      if (i < 5) json += ",";
+    }
+    json += "],";
+    json += "\"motorStates\":[";
+    for (int i = 0; i < 6; i++) {
+      json += "{\"waitingForInput\":" + String(motorStates[i].waitingForInput ? "true" : "false");
+      json += ",\"isActive\":" + String(motorStates[i].isActive ? "true" : "false");
+      json += ",\"delayRemaining\":" + String(motorStates[i].waitingForInput ? 
+        max(0L, (long)getRandomDelay(i) - (long)(millis() - motorStates[i].delayStartTime)) : 0);
+      json += "}";
+      if (i < 5) json += ",";
+    }
+    json += "],";
+    json += "\"uptime\":" + String(millis()) + ",";
+    json += "\"freeHeap\":" + String(ESP.getFreeHeap());
+    json += "}";
+    
+    request->send(200, "application/json", json);
+  });
+
+  // Add endpoint for getting current configuration
+  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String json = "{\"relayDelays\":[";
+    for (int i = 0; i < 6; i++) {
+      json += "{\"relay\":" + String(i);
+      json += ",\"minDelay\":" + String(minDelayRelay[i]);
+      json += ",\"maxDelay\":" + String(maxDelayRelay[i]) + "}";
       if (i < 5) json += ",";
     }
     json += "]}";
@@ -393,100 +521,65 @@ void loop() {
   // Check for timeouts first
   checkInputTimeouts();
   
-  // Relay 0 logic
-  if(inputs.digitalRead(0) == LOW && !z0 && relays.digitalRead(0) == LOW) {
-    stopInputTimeout(0); // Clear timeout since input was detected
-    Serial.println("Input 0 is LOW, turning off relay 0");
-    relays.digitalWrite(0, HIGH); // Set relay 0 to off
-    r0 = millis();
-    z0 = true;
-    delay(10);
+  // Check motor safety before processing
+  if (!checkMotorSafety()) {
+    return; // Stop processing if safety check fails
   }
-  if (z0 == true && millis() - r0 >= getRandomDelay(0)) {
-    relays.digitalWrite(1, LOW); // Turn on relay 1
-    startInputTimeout(1); // Start monitoring for input on relay 1
-    z0 = false;
-    delay(10);
+  
+  // Only process if system is not in error state
+  if (systemState == SYSTEM_ERROR) {
+    delay(1000); // Wait before retrying
+    return;
   }
+  
+  // Process each relay pair
+  for (int relayPair = 0; relayPair < 3; relayPair++) {
+    int relay1 = relayPair * 2;     // 0, 2, 4
+    int relay2 = relayPair * 2 + 1; // 1, 3, 5
+    
+    // Check relay1 (even numbered relays: 0, 2, 4)
+    if(safeInputRead(relay1) == LOW && 
+       !motorStates[relay1].waitingForInput && 
+       relays.digitalRead(relay1) == LOW) {
+      
+      stopInputTimeout(relay1);
+      Serial.println("Input " + String(relay1) + " is LOW, turning off relay " + String(relay1));
+      safeRelayWrite(relay1, HIGH);
+      motorStates[relay1].delayStartTime = millis();
+      motorStates[relay1].waitingForInput = true;
+      delay(10);
+    }
+    
+    if (motorStates[relay1].waitingForInput && 
+        millis() - motorStates[relay1].delayStartTime >= getRandomDelay(relay1)) {
+      safeRelayWrite(relay2, LOW);
+      startInputTimeout(relay2);
+      motorStates[relay1].waitingForInput = false;
+      systemState = SYSTEM_RUNNING;
+      delay(10);
+    }
 
-  // Relay 1 logic
-  if(inputs.digitalRead(1) == LOW && !z1 && relays.digitalRead(1) == LOW) {
-    stopInputTimeout(1); // Clear timeout since input was detected
-    Serial.println("Input 1 is LOW, turning off relay 1");
-    relays.digitalWrite(1, HIGH); // Set relay 1 to off
-    r1 = millis();
-    z1 = true;
-    delay(10);
-  }
-  if (z1 == true && millis() - r1 >= getRandomDelay(1)) {
-    relays.digitalWrite(0, LOW); // Turn on relay 0
-    startInputTimeout(0); // Start monitoring for input on relay 0
-    z1 = false;
-    delay(10);
-  }
-
-  // Relay 2 logic
-  if(inputs.digitalRead(2) == LOW && !z2 && relays.digitalRead(2) == LOW) {
-    stopInputTimeout(2); // Clear timeout since input was detected
-    Serial.println("Input 2 is LOW, turning off relay 2");
-    relays.digitalWrite(2, HIGH); // Set relay 2 to off
-    r2 = millis();
-    z2 = true;
-    delay(10);
-  }
-  if (z2 == true && millis() - r2 >= getRandomDelay(2)) {
-    relays.digitalWrite(3, LOW); // Turn on relay 3
-    startInputTimeout(3); // Start monitoring for input on relay 3
-    z2 = false;
-    delay(10);
-  }
-
-  // Relay 3 logic
-  if(inputs.digitalRead(3) == LOW && !z3 && relays.digitalRead(3) == LOW) {
-    stopInputTimeout(3); // Clear timeout since input was detected
-    Serial.println("Input 3 is LOW, turning off relay 3");
-    relays.digitalWrite(3, HIGH); // Set relay 3 to off
-    r3 = millis();
-    z3 = true;
-    delay(10);
-  }
-  if (z3 == true && millis() - r3 >= getRandomDelay(3)) {
-    relays.digitalWrite(2, LOW); // Turn on relay 2
-    startInputTimeout(2); // Start monitoring for input on relay 2
-    z3 = false;
-    delay(10);
-  }
-
-  // Relay 4 logic
-  if(inputs.digitalRead(4) == LOW && !z4 && relays.digitalRead(4) == LOW) {
-    stopInputTimeout(4); // Clear timeout since input was detected
-    Serial.println("Input 4 is LOW, turning off relay 4");
-    relays.digitalWrite(4, HIGH); // Set relay 4 to off
-    r4 = millis();
-    z4 = true;
-    delay(10);
-  }
-  if (z4 == true && millis() - r4 >= getRandomDelay(4)) {
-    relays.digitalWrite(5, LOW); // Turn on relay 5
-    startInputTimeout(5); // Start monitoring for input on relay 5
-    z4 = false;
-    delay(10);
-  }
-
-  // Relay 5 logic
-  if(inputs.digitalRead(5) == LOW && !z5 && relays.digitalRead(5) == LOW) {
-    stopInputTimeout(5); // Clear timeout since input was detected
-    Serial.println("Input 5 is LOW, turning off relay 5");
-    relays.digitalWrite(5, HIGH); // Set relay 5 to off
-    r5 = millis();
-    z5 = true;
-    delay(10);
-  }
-  if (z5 == true && millis() - r5 >= getRandomDelay(5)) {
-    relays.digitalWrite(4, LOW); // Turn on relay 4
-    startInputTimeout(4); // Start monitoring for input on relay 4
-    z5 = false;
-    delay(10);
+    // Check relay2 (odd numbered relays: 1, 3, 5)  
+    if(safeInputRead(relay2) == LOW && 
+       !motorStates[relay2].waitingForInput && 
+       relays.digitalRead(relay2) == LOW) {
+      
+      stopInputTimeout(relay2);
+      Serial.println("Input " + String(relay2) + " is LOW, turning off relay " + String(relay2));
+      safeRelayWrite(relay2, HIGH);
+      motorStates[relay2].delayStartTime = millis();
+      motorStates[relay2].waitingForInput = true;
+      delay(10);
+    }
+    
+    if (motorStates[relay2].waitingForInput && 
+        millis() - motorStates[relay2].delayStartTime >= getRandomDelay(relay2)) {
+      safeRelayWrite(relay1, LOW);
+      startInputTimeout(relay1);
+      motorStates[relay2].waitingForInput = false;
+      systemState = SYSTEM_RUNNING;
+      delay(10);
+    }
   }
   
   delay(10);
