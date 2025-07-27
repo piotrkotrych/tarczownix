@@ -320,11 +320,11 @@ void setup() {
     html += "</style>";
     html += "</head><body>";
     html += "<div class='container'>";
-    html += "<h1>🏭 TARCZOWNIX Motor Control System</h1>";
+    html += "<h1>TARCZOWNIX Motor Control System</h1>";
 
     // System Status Overview
     html += "<div class='card'>";
-    html += "<h2>📊 System Status</h2>";
+    html += "<h2>System Status</h2>";
     html += "<p><strong>System State:</strong> ";
     switch(systemState) {
       case SYSTEM_STOPPED: html += "<span style='color: #ff9800;'>STOPPED</span>"; break;
@@ -340,12 +340,12 @@ void setup() {
 
     // Relay control section with better visualization
     html += "<div class='card'>";
-    html += "<h2>🎮 Sequence Control</h2>";
-    html += "<a href='/start' class='btn'>▶️ Start Sequence</a>";
-    html += "<a href='/stop' class='btn btn-stop'>⏹️ Stop Sequence</a>";
+    html += "<h2>Sequence Control</h2>";
+    html += "<a href='/start' class='btn'>Start Sequence</a>";
+    html += "<a href='/stop' class='btn btn-stop'>Stop Sequence</a>";
     
     // Motor Pair Status
-    html += "<h3>🏭 Motor Pair Status</h3>";
+    html += "<h3>Motor Pair Status</h3>";
     for (int pair = 0; pair < 3; pair++) {
       int relay1 = pair * 2;
       int relay2 = pair * 2 + 1;
@@ -353,10 +353,10 @@ void setup() {
       html += "<h4>Motor Pair " + String(pair + 1) + " (Relays " + String(relay1) + " & " + String(relay2) + ")</h4>";
       html += "<div style='display: flex; justify-content: space-around;'>";
       html += "<div class='status-item " + String(relays.digitalRead(relay1) == LOW ? "status-on" : "status-off") + "'>";
-      html += "Relay " + String(relay1) + ": " + (relays.digitalRead(relay1) == LOW ? "🟢 ON" : "🔴 OFF");
+      html += "Relay " + String(relay1) + ": " + (relays.digitalRead(relay1) == LOW ? "ON" : "OFF");
       html += "</div>";
       html += "<div class='status-item " + String(relays.digitalRead(relay2) == LOW ? "status-on" : "status-off") + "'>";
-      html += "Relay " + String(relay2) + ": " + (relays.digitalRead(relay2) == LOW ? "🟢 ON" : "🔴 OFF");
+      html += "Relay " + String(relay2) + ": " + (relays.digitalRead(relay2) == LOW ? "ON" : "OFF");
       html += "</div>";
       html += "</div>";
       html += "</div>";
@@ -365,7 +365,7 @@ void setup() {
 
     // Enhanced delay configuration
     html += "<div class='card'>";
-    html += "<h2>⚙️ Delay Configuration</h2>";
+    html += "<h2>Delay Configuration</h2>";
     html += "<div class='relay-config'>";
     for (int i = 0; i < 6; i++) {
       html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
@@ -380,7 +380,7 @@ void setup() {
       html += "<label for='max'>Max Delay (ms):</label>";
       html += "<input type='number' id='max' name='max' min='100' max='20000' value='" + String(maxDelayRelay[i]) + "' required>";
       html += "</div>";
-      html += "<input type='submit' class='btn' value='💾 Save Settings' style='width: 100%;'>";
+      html += "<input type='submit' class='btn' value='Save Settings' style='width: 100%;'>";
       html += "</form>";
       html += "<p><small>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</small></p>";
       html += "</div>";
