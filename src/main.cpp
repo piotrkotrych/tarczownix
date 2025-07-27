@@ -69,6 +69,9 @@ const char* password = "pass"; // Password for the access point
 int minDelayRelay[6] = {1000, 1000, 1000, 1000, 1000, 1000}; // Default min delay for each relay
 int maxDelayRelay[6] = {5000, 5000, 5000, 5000, 5000, 5000}; // Default max delay for each relay
 
+// Safety timeout configuration (in milliseconds)
+int safetyTimeoutMs = 1000; // Default 1 second timeout
+
 // --- Web Server ---
 AsyncWebServer server(80); // Create a web server on port 80
 
@@ -76,6 +79,8 @@ AsyncWebServer server(80); // Create a web server on port 80
 int getRandomDelay(int relay);
 void saveRelayDelays();
 void loadRelayDelays();
+void saveSafetyTimeout();
+void loadSafetyTimeout();
 
 // Custom program functions
 bool saveProgram(const String& programName, const String& programData);
@@ -168,8 +173,8 @@ void checkInputTimeouts() {
   
   for (int i = 0; i < 6; i++) {
     if (inputTimeoutActive[i]) {
-      // Check if 1 second has passed
-      if (currentTime - inputTimeoutStart[i] >= 1000) {
+      // Check if safety timeout has passed
+      if (currentTime - inputTimeoutStart[i] >= safetyTimeoutMs) {
         // Timeout occurred - turn off all relays
         for (int j = 0; j < 6; j++) {
           relays.digitalWrite(j, HIGH); // Turn off all relays
@@ -188,7 +193,7 @@ void checkInputTimeouts() {
         }
         
         // Create error message
-        lastErrorMessage = "Relay " + String(i) + " did not reach input " + String(i) + " before one second";
+        lastErrorMessage = "Relay " + String(i) + " did not reach input " + String(i) + " before " + String(safetyTimeoutMs) + "ms timeout";
         lastErrorTime = currentTime;
         
         Serial.println("TIMEOUT ERROR: " + lastErrorMessage);
@@ -229,6 +234,9 @@ void setup() {
 
   // Load saved relay delays
   loadRelayDelays();
+
+  // Load saved safety timeout
+  loadSafetyTimeout();
 
   // set inputs to pull-up mode
   inputs.pinMode(0, INPUT); // Set pin 0 as input
@@ -323,6 +331,52 @@ void setup() {
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta http-equiv='refresh' content='3;url=/' />"; // Redirect after 3 seconds
     html += "<title>Settings Updated</title><style>";
+    html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
+    html += ".success { color: green; }";
+    html += ".error { color: red; }";
+    html += "</style></head><body>";
+    html += "<h2 class='" + String(hasError ? "error" : "success") + "'>" + message + "</h2>";
+    html += "<p>Redirecting back to home page...</p>";
+    html += "</body></html>";
+
+    request->send(200, "text/html", html);
+  });
+
+  // Add endpoint to handle safety timeout configuration
+  server.on("/set-safety-timeout", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String message = "";
+    bool hasError = false;
+
+    // Check if timeout parameter exists
+    if (request->hasParam("timeout")) {
+      int newTimeout = request->getParam("timeout")->value().toInt();
+
+      // Validate the timeout value
+      if (newTimeout < 500) {
+        message = "Error: Safety timeout cannot be less than 500ms";
+        hasError = true;
+      } else if (newTimeout > 10000) {
+        message = "Error: Safety timeout cannot exceed 10000ms (10 seconds)";
+        hasError = true;
+      } else {
+        // Update the safety timeout
+        safetyTimeoutMs = newTimeout;
+
+        // Save updated timeout to flash
+        saveSafetyTimeout();
+
+        message = "Safety timeout updated to " + String(newTimeout) + "ms";
+        Serial.println(message);
+      }
+    } else {
+      message = "Error: Missing timeout parameter";
+      hasError = true;
+    }
+
+    // Return response with redirect
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta http-equiv='refresh' content='3;url=/' />"; // Redirect after 3 seconds
+    html += "<title>Safety Timeout Updated</title><style>";
     html += "body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }";
     html += ".success { color: green; }";
     html += ".error { color: red; }";
@@ -471,6 +525,23 @@ void setup() {
       html += "<p><small>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</small></p>";
       html += "</div>";
     }
+    html += "</div>";
+    html += "</div>";
+
+    // Safety Timeout Configuration
+    html += "<div class='card'>";
+    html += "<h2>Safety Configuration</h2>";
+    html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
+    html += "<h3>Safety Timeout</h3>";
+    html += "<p>Current timeout: <strong>" + String(safetyTimeoutMs) + "ms</strong></p>";
+    html += "<p><small>If a relay doesn't receive its corresponding input signal within this time, all relays will be turned off for safety.</small></p>";
+    html += "<form action='/set-safety-timeout' method='get'>";
+    html += "<div class='form-group'>";
+    html += "<label for='timeout'>Timeout (ms):</label>";
+    html += "<input type='number' id='timeout' name='timeout' min='500' max='10000' value='" + String(safetyTimeoutMs) + "' required>";
+    html += "</div>";
+    html += "<input type='submit' class='btn' value='Update Safety Timeout' style='width: 100%;'>";
+    html += "</form>";
     html += "</div>";
     html += "</div>";
 
@@ -1093,6 +1164,20 @@ void loadRelayDelays() {
   }
   preferences.end(); // Close preferences
   Serial.println("Relay delays loaded from flash.");
+}
+
+void saveSafetyTimeout() {
+  preferences.begin("safetyConfig", false); // Open preferences in read/write mode
+  preferences.putInt("timeoutMs", safetyTimeoutMs);
+  preferences.end(); // Close preferences
+  Serial.println("Safety timeout saved to flash: " + String(safetyTimeoutMs) + "ms");
+}
+
+void loadSafetyTimeout() {
+  preferences.begin("safetyConfig", true); // Open preferences in read-only mode
+  safetyTimeoutMs = preferences.getInt("timeoutMs", 1000); // Default to 1000ms if not found
+  preferences.end(); // Close preferences
+  Serial.println("Safety timeout loaded from flash: " + String(safetyTimeoutMs) + "ms");
 }
 
 // Custom program management functions
