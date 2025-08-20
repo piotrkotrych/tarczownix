@@ -8,6 +8,8 @@
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
 
+#define ANALOG_A1 36
+
 // Motor control state structure for better organization
 struct MotorState {
   unsigned long delayStartTime = 0;
@@ -237,6 +239,8 @@ void setup() {
 
   // Load saved safety timeout
   loadSafetyTimeout();
+
+  pinMode(ANALOG_A1, INPUT);
 
   // set inputs to pull-up mode
   inputs.pinMode(0, INPUT); // Set pin 0 as input
@@ -1063,6 +1067,7 @@ void loop() {
   // Check for timeouts first
   checkInputTimeouts();
   
+  
   // Check motor safety before processing
   if (!checkMotorSafety()) {
     return; // Stop processing if safety check fails
@@ -1072,6 +1077,43 @@ void loop() {
   if (systemState == SYSTEM_ERROR) {
     delay(1000); // Wait before retrying
     return;
+  }
+  
+  // Test DFRobot Gravity sound level meter on analog pin 4 (GPIO 35)
+  static unsigned long lastMicCheck = 0;
+  if (millis() - lastMicCheck >= 125) { // Check every 125ms as per DFRobot sample
+    float voltageValue, dbValue;
+    // ESP32 uses 12-bit ADC (0-4095) and 3.3V reference instead of Arduino's 10-bit (0-1023) and 5V
+    voltageValue = analogRead(ANALOG_A1) / 4095.0 * 3.3; // Convert to voltage (ESP32 specific)
+    dbValue = voltageValue * 50.0; // Convert voltage to decibel value as per DFRobot formula
+    Serial.print("Sound Level: ");
+    Serial.print(dbValue, 1);
+    Serial.print(" dBA (");
+    Serial.print(voltageValue, 2);
+    Serial.println("V)");
+    
+    // Trigger sequence mode when sound level exceeds 50 dBA
+    if (dbValue >= 50.0) {
+      // Check if relays 0, 2, 4 are off before starting (same logic as web interface)
+      if (relays.digitalRead(0) == HIGH && relays.digitalRead(2) == HIGH && relays.digitalRead(4) == HIGH) {
+        Serial.println("Sound trigger activated! Starting sequence mode...");
+        relays.digitalWrite(0, LOW); // Turn on relay 0
+        relays.digitalWrite(2, LOW); // Turn on relay 2  
+        relays.digitalWrite(4, LOW); // Turn on relay 4
+        
+        // Start timeout monitoring for the relays that are now on
+        startInputTimeout(0);
+        startInputTimeout(2);
+        startInputTimeout(4);
+        
+        currentMode = MODE_SEQUENCE; // Ensure we're in sequence mode
+        systemState = SYSTEM_RUNNING;
+      } else {
+        Serial.println("Sound trigger detected but relays already active");
+      }
+    }
+    
+    lastMicCheck = millis();
   }
   
   // Handle different operating modes
