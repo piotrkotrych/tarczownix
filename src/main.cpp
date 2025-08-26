@@ -463,6 +463,7 @@ void setup() {
   // Update the root route to include delay configuration form
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     // Remove auto-refresh for better UX with program selector
     html += "<title>TARCZOWNIX Control</title>";
@@ -494,7 +495,7 @@ void setup() {
     html += "</head><body>";
     html += "<div class='container'>";
     html += "<h1>TARCZOWNIX Motor Control System</h1>";
-    html += "<button onclick='location.reload()' class='btn' style='background-color: #2196f3; margin-bottom: 20px;'>🔄 Refresh Status</button>";
+    html += "<button onclick='location.reload()' class='btn' style='background-color: #2196f3; margin-bottom: 20px;'>&#8635; Refresh Status</button>";
 
     // System Status Overview
     html += "<div class='card'>";
@@ -806,6 +807,7 @@ void setup() {
   // Pair-Based Program Editor Route
   server.on("/program-editor", HTTP_GET, [](AsyncWebServerRequest *request) {
     String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>TARCZOWNIX - Pair Program Editor</title>";
     html += "<style>";
