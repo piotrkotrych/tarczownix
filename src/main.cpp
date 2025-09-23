@@ -32,36 +32,10 @@ SystemState systemState = SYSTEM_STOPPED;
 // Operating modes
 enum OperatingMode {
   MODE_SEQUENCE,  // Original sequence mode
-  MODE_CUSTOM,    // Custom program mode
   MODE_ZAWODY,    // Competition mode
   MODE_MANUAL     // Manual mode
 };
 OperatingMode currentMode = MODE_SEQUENCE;
-
-// Custom program structures - redesigned for motor pairs
-struct MotorPairBlock {
-  int pairId;           // 0, 1, or 2 (for pairs 0-1, 2-3, 4-5)
-  int delayMs;          // Delay when first input is triggered  
-  bool waitForInput;    // Whether to wait for input before proceeding to next block
-};
-
-struct PairProgram {
-  String name;
-  bool loopEnabled;
-  bool waitForMicTrigger; // Whether this program waits for mic trigger to start
-  float micThreshold;     // Mic threshold for this program (if waitForMicTrigger is true)
-  int blockCount;
-  MotorPairBlock blocks[10]; // Maximum 10 pair blocks per program
-};
-
-// Pair execution states
-enum PairState {
-  PAIR_IDLE,
-  PAIR_FIRST_RELAY,     // First relay activated, waiting for input
-  PAIR_DELAY,           // Delay period after first input
-  PAIR_SECOND_RELAY,    // Second relay activated, waiting for input
-  PAIR_COMPLETE         // Block finished, ready for next
-};
 
 // Competition mode structures
 struct CompetitionSettings {
@@ -106,16 +80,6 @@ struct ManualState {
   unsigned long target3MoveStart;
 };
 
-// Current pair-based program execution state
-PairProgram currentPairProgram;
-int currentBlockIndex = 0;
-bool pairProgramRunning = false;
-bool waitingForCustomMicTrigger = false; // Whether we're waiting for mic to start custom program
-PairState currentPairState = PAIR_IDLE;
-int activePairId = -1;
-unsigned long pairDelayStartTime = 0;
-unsigned long pairStateStartTime = 0;
-
 // Competition mode variables
 CompetitionSettings competitionSettings = {50.0, 0, 2000, 2000, 1000, 2000, 2000, 2000, 2000, 2000, 3}; // Default settings with delays
 CompetitionState competitionState = {false, false, false, 0, 0, 0, 0, 0, false, false, false, 0, 0, 0};
@@ -155,17 +119,6 @@ void saveSafetyTimeout();
 void loadSafetyTimeout();
 void saveMicDbThreshold();
 void loadMicDbThreshold();
-
-// Custom program functions - updated for pair-based programming
-bool savePairProgram(const String& programName, const String& programData);
-String loadPairProgram(const String& programName);
-String getPairProgramList();
-bool deletePairProgram(const String& programName);
-bool validatePairProgramSafety(const String& programData);
-void executePairProgram();
-void stopPairProgram();
-int getPairFirstRelay(int pairId);
-int getPairSecondRelay(int pairId);
 
 // Competition mode functions
 bool isTargetHidden(int targetId);
@@ -526,7 +479,7 @@ void setup() {
     request->send(200, "text/html", html);
   });
 
-  // Add endpoint for microphone dB threshold configuration (used by custom programs)
+  // Add endpoint for microphone dB threshold configuration (legacy compatibility)
   server.on("/set-mic-threshold", HTTP_GET, [](AsyncWebServerRequest *request) {
     String message;
     bool hasError = false;
@@ -547,7 +500,7 @@ void setup() {
         // Save updated threshold to flash
         saveMicDbThreshold();
 
-        message = "Microphone threshold updated to " + String(newThreshold, 1) + " dBA (for custom programs)";
+        message = "Microphone threshold updated to " + String(newThreshold, 1) + " dBA";
         Serial.println(message);
       }
     } else {
@@ -646,9 +599,6 @@ void setup() {
       case MODE_SEQUENCE: 
         html += "<span style='color: #2196f3;'>SEQUENCE</span>"; 
         break;
-      case MODE_CUSTOM: 
-        html += "<span style='color: #2196f3;'>CUSTOM PROGRAM</span>"; 
-        break;
       case MODE_ZAWODY: 
         html += "<span style='color: #9c27b0;'>COMPETITION</span>"; 
         break;
@@ -657,23 +607,8 @@ void setup() {
         break;
     }
     html += "</p>";
-    html += "<p><strong>Custom Program Mic Threshold:</strong> <span id='mic-threshold'>" + String(micDbThreshold, 1) + " dBA</span></p>";
-    if (currentMode == MODE_CUSTOM && waitingForCustomMicTrigger) {
-      html += "<p><strong>Status:</strong> <span style='color: #ff9800;'>Waiting for mic trigger (" + String(currentPairProgram.micThreshold, 1) + " dBA)</span></p>";
-      html += "<p><strong>Program Ready:</strong> " + currentPairProgram.name + "</p>";
-    } else if (currentMode == MODE_CUSTOM && pairProgramRunning) {
-      html += "<p><strong>Current Program:</strong> " + currentPairProgram.name + "</p>";
-      html += "<p><strong>Program Block:</strong> " + String(currentBlockIndex + 1) + " / " + String(currentPairProgram.blockCount) + "</p>";
-      html += "<p><strong>Pair State:</strong> ";
-      switch(currentPairState) {
-        case PAIR_IDLE: html += "Idle"; break;
-        case PAIR_FIRST_RELAY: html += "First Relay Active"; break;
-        case PAIR_DELAY: html += "Delay Period"; break;
-        case PAIR_SECOND_RELAY: html += "Second Relay Active"; break;
-        case PAIR_COMPLETE: html += "Block Complete"; break;
-      }
-      html += "</p>";
-    } else if (currentMode == MODE_ZAWODY) {
+    html += "<p><strong>Microphone Threshold:</strong> <span id='mic-threshold'>" + String(micDbThreshold, 1) + " dBA</span></p>";
+    if (currentMode == MODE_ZAWODY) {
       if (competitionState.waitingForMicTrigger) {
         html += "<p><strong>Status:</strong> <span style='color: #ff9800;'>Competition ready - waiting for mic trigger (" + String(competitionSettings.micTriggerThreshold, 1) + " dBA)</span></p>";
       } else if (competitionState.isRunning) {
@@ -698,12 +633,10 @@ void setup() {
     html += "<h2>Operating Mode</h2>";
     html += "<div class='button-group'>";
     html += "<a href='/set-mode?mode=sequence' class='btn " + String(currentMode == MODE_SEQUENCE ? "btn-stop" : "") + "'>Sequence Mode</a>";
-    html += "<a href='/set-mode?mode=custom' class='btn " + String(currentMode == MODE_CUSTOM ? "btn-stop" : "") + "'>Custom Program Mode</a>";
     html += "<a href='/start-competition' class='btn " + String(currentMode == MODE_ZAWODY ? "btn-stop" : "") + "' style='background-color: #9c27b0;'>Competition Mode</a>";
     html += "<a href='/start-manual' class='btn " + String(currentMode == MODE_MANUAL ? "btn-stop" : "") + "' style='background-color: #ff5722;'>Manual Mode</a>";
     html += "</div>";
     html += "<div class='button-group' style='margin-top: 15px;'>";
-    html += "<a href='/program-editor' class='btn btn-clear'>Program Editor</a>";
     html += "<a href='/competition-settings' class='btn btn-clear' style='background-color: #673ab7;'>Competition Settings</a>";
     html += "</div>";
     html += "</div>";
@@ -716,40 +649,6 @@ void setup() {
       html += "<a href='/start' class='btn'>Start Sequence</a>";
       html += "<a href='/stop' class='btn btn-stop'>Stop Sequence</a>";
       html += "</div>";
-    } else if (currentMode == MODE_CUSTOM) {
-      html += "<h2>Custom Program Control</h2>";
-      if (pairProgramRunning) {
-        html += "<a href='/stop-program' class='btn btn-stop'>Stop Program</a>";
-      } else {
-        html += "<p>Select a program to execute:</p>";
-        // Add program selection here (this will be populated by JavaScript)
-        html += "<div id='program-selector' style='margin: 10px 0;'></div>";
-        html += "<script>";
-        html += "let currentProgramList = null;";
-        html += "function loadProgramSelector() {";
-        html += "  fetch('/program-list').then(r=>r.json()).then(d=>{";
-        html += "    const selector = document.getElementById('program-selector');";
-        html += "    const currentSelect = document.getElementById('program-select');";
-        html += "    const currentValue = currentSelect ? currentSelect.value : '';";
-        html += "    ";
-        html += "    if (JSON.stringify(d.programs) !== JSON.stringify(currentProgramList)) {";
-        html += "      currentProgramList = d.programs;";
-        html += "      let html='<select id=\"program-select\" style=\"padding:5px;margin:5px;\"><option value=\"\">Select Program...</option>';";
-        html += "      d.programs.forEach(p=>html+=`<option value=\"${p}\">${p}</option>`);";
-        html += "      html+='</select><button onclick=\"executeSelectedProgram()\" class=\"btn\">Execute Program</button>';";
-        html += "      selector.innerHTML=html;";
-        html += "      if (currentValue) document.getElementById('program-select').value = currentValue;";
-        html += "    }";
-        html += "  });";
-        html += "}";
-        html += "loadProgramSelector();";
-        html += "function executeSelectedProgram(){";
-        html += "const select=document.getElementById('program-select');";
-        html += "if(select.value)window.location.href='/execute-program?name='+encodeURIComponent(select.value);";
-        html += "else alert('Please select a program');";
-        html += "}";
-        html += "</script>";
-      }
     } else if (currentMode == MODE_ZAWODY) {
       html += "<h2>Competition Control</h2>";
       if (competitionState.isRunning) {
@@ -866,13 +765,13 @@ void setup() {
     html += "</div>";
     html += "</div>";
 
-    // Microphone Configuration (for Custom Programs)
+    // Microphone Configuration
     html += "<div class='card'>";
     html += "<h2>Microphone Configuration</h2>";
     html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
     html += "<h3>Sound Trigger Threshold</h3>";
     html += "<p>Current threshold: <strong>" + String(micDbThreshold, 1) + " dBA</strong></p>";
-    html += "<p><small>This threshold is used for custom programs that have microphone trigger enabled. Competition mode has its own threshold setting.</small></p>";
+    html += "<p><small>This threshold setting is maintained for compatibility. Competition mode has its own threshold setting.</small></p>";
     html += "<form action='/set-mic-threshold' method='get'>";
     html += "<div class='form-group'>";
     html += "<label for='threshold'>Threshold (dBA):</label>";
@@ -1027,508 +926,12 @@ void setup() {
     request->send(200, "text/html", html);
   });
 
-  // Pair-Based Program Editor Route
-  server.on("/program-editor", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<meta charset='UTF-8'>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<title>TARCZOWNIX - Target Program Editor</title>";
-    html += "<style>";
-    html += "* { box-sizing: border-box; }";
-    html += "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; ";
-    html += "margin: 0; padding: 15px; background-color: #f5f5f5; font-size: 16px; line-height: 1.4; }";
-    html += ".container { max-width: 1200px; margin: 0 auto; background-color: white; ";
-    html += "padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }";
-    html += "h1 { text-align: center; color: #333; margin-bottom: 20px; font-size: clamp(1.5rem, 4vw, 2.2rem); }";
-    html += ".editor-section { border: 2px dashed #ccc; padding: 20px; margin: 20px 0; ";
-    html += "min-height: 200px; border-radius: 8px; }";
-    html += ".target-item { background-color: #e3f2fd; border: 1px solid #1976d2; ";
-    html += "padding: 15px; margin: 10px; border-radius: 5px; cursor: grab; ";
-    html += "display: inline-block; min-width: 180px; text-align: center; }";
-    html += "@media (max-width: 768px) { .target-item { display: block; width: 100%; margin: 10px 0; } }";
-    html += ".target-item:active { cursor: grabbing; }";
-    html += ".target-item h4 { margin: 5px 0; color: #1976d2; }";
-    html += ".target-item .relays { font-size: 14px; color: #666; }";
-    html += ".block-item { background-color: #f1f8e9; border: 1px solid #689f38; ";
-    html += "padding: 15px; margin: 10px 0; border-radius: 8px; position: relative; }";
-    html += ".block-controls { margin-top: 15px; }";
-    html += ".block-controls input, .block-controls select { margin: 5px; padding: 8px; ";
-    html += "border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }";
-    html += "@media (max-width: 768px) { .block-controls input, .block-controls select { width: 100%; margin: 5px 0; } }";
-    html += ".btn { background-color: #4CAF50; border: none; color: white; ";
-    html += "padding: 12px 20px; text-decoration: none; display: inline-block; ";
-    html += "border-radius: 5px; cursor: pointer; margin: 5px; font-size: 16px; ";
-    html += "transition: all 0.3s ease; touch-action: manipulation; }";
-    html += "@media (max-width: 768px) { .btn { display: block; width: 100%; margin: 5px 0; text-align: center; } }";
-    html += ".btn:hover, .btn:focus { transform: translateY(-1px); outline: none; }";
-    html += ".btn-danger { background-color: #f44336; }";
-    html += ".btn-danger:hover { background-color: #da190b; }";
-    html += ".btn-warning { background-color: #ff9800; }";
-    html += ".btn-warning:hover { background-color: #e68900; }";
-    html += ".btn-secondary { background-color: #6c757d; }";
-    html += ".btn-secondary:hover { background-color: #5a6268; }";
-    html += ".form-group { margin: 15px 0; }";
-    html += ".form-group label { display: block; margin-bottom: 5px; font-weight: bold; }";
-    html += "@media (min-width: 769px) { .form-group label { display: inline-block; width: 150px; margin-bottom: 0; } }";
-    html += ".safety-info { background-color: #e8f5e8; border: 2px solid #4CAF50; ";
-    html += "padding: 15px; margin: 20px 0; border-radius: 8px; }";
-    html += ".program-list { background-color: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0; }";
-    html += ".program-item { background-color: white; padding: 15px; margin: 5px 0; ";
-    html += "border-radius: 5px; border: 1px solid #ddd; }";
-    html += "@media (min-width: 769px) { .program-item { display: flex; justify-content: space-between; align-items: center; } }";
-    html += ".button-group { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 15px; }";
-    html += "@media (max-width: 768px) { .button-group { flex-direction: column; gap: 0; } }";
-    html += "</style>";
-    html += "<script>";
-    html += "let draggedElement = null;";
-    html += "let blockCounter = 0;";
-    html += "let currentBlocks = [];";
-    html += "let loadProgramListTimeout = null;"; // Debounce timeout
-    
-    // JavaScript for drag and drop functionality
-    html += "function allowDrop(ev) { ev.preventDefault(); }";
-    html += "function drag(ev) { draggedElement = ev.target; }";
-    html += "function drop(ev) {";
-    html += "  ev.preventDefault();";
-    html += "  if (draggedElement && draggedElement.classList.contains('target-item')) {";
-    html += "    addBlock(draggedElement.getAttribute('data-pair'));";
-    html += "  }";
-    html += "}";
-    
-    // Function to add a target block
-    html += "function addBlock(pairId) {";
-    html += "  const targetNames = ['Target 0 (Relays 0-1)', 'Target 1 (Relays 2-3)', 'Target 2 (Relays 4-5)'];";
-    html += "  const blockDiv = document.createElement('div');";
-    html += "  blockDiv.className = 'block-item';";
-    html += "  blockDiv.setAttribute('data-block', blockCounter);";
-    html += "  blockDiv.innerHTML = `";
-    html += "    <h4>Block ${blockCounter + 1}: ${targetNames[pairId]}</h4>";
-    html += "    <p><strong>Operation:</strong> Activate first relay → Wait for input → Apply delay → Activate second relay → Wait for input → Next block</p>";
-    html += "    <div class='block-controls'>";
-    html += "      <label>Delay after first input (ms):</label>";
-    html += "      <input type='number' min='100' max='60000' value='2000' onchange='updateBlock(${blockCounter})' id='delay-${blockCounter}'>";
-    html += "      <br>";
-    html += "      <label>Wait for second input:</label>";
-    html += "      <select onchange='updateBlock(${blockCounter})' id='wait-${blockCounter}'>";
-    html += "        <option value='true'>Yes (Recommended)</option>";
-    html += "        <option value='false'>No</option>";
-    html += "      </select>";
-    html += "      <br>";
-    html += "      <button class='btn btn-danger' onclick='removeBlock(${blockCounter})'>Remove Block</button>";
-    html += "      <button class='btn btn-warning' onclick='moveBlockUp(${blockCounter})'>Move Up</button>";
-    html += "      <button class='btn btn-warning' onclick='moveBlockDown(${blockCounter})'>Move Down</button>";
-    html += "    </div>";
-    html += "  `;";
-    html += "  document.getElementById('program-blocks').appendChild(blockDiv);";
-    html += "  currentBlocks.push({pairId: parseInt(pairId), delayMs: 2000, waitForInput: true, blockId: blockCounter});";
-    html += "  blockCounter++;";
-    html += "  updateBlockNumbers();";
-    html += "}";
-    
-    // Other JavaScript functions
-    html += "function removeBlock(blockId) {";
-    html += "  document.querySelector(`[data-block='${blockId}']`).remove();";
-    html += "  currentBlocks = currentBlocks.filter(block => block.blockId !== blockId);";
-    html += "  updateBlockNumbers();";
-    html += "}";
-    
-    html += "function updateBlock(blockId) {";
-    html += "  const block = currentBlocks.find(b => b.blockId === blockId);";
-    html += "  if (block) {";
-    html += "    block.delayMs = parseInt(document.getElementById(`delay-${blockId}`).value);";
-    html += "    block.waitForInput = document.getElementById(`wait-${blockId}`).value === 'true';";
-    html += "  }";
-    html += "}";
-    
-    html += "function updateBlockNumbers() {";
-    html += "  const blocks = document.querySelectorAll('.block-item');";
-    html += "  blocks.forEach((block, index) => {";
-    html += "    const h4 = block.querySelector('h4');";
-    html += "    const oldText = h4.textContent;";
-    html += "    h4.textContent = oldText.replace(/Block \\d+:/, `Block ${index + 1}:`);";
-    html += "  });";
-    html += "}";
-    
-    html += "function moveBlockUp(blockId) {";
-    html += "  const blockEl = document.querySelector(`[data-block='${blockId}']`);";
-    html += "  const prevSibling = blockEl.previousElementSibling;";
-    html += "  if (prevSibling) {";
-    html += "    blockEl.parentNode.insertBefore(blockEl, prevSibling);";
-    html += "    updateBlockNumbers();";
-    html += "  }";
-    html += "}";
-    
-    html += "function moveBlockDown(blockId) {";
-    html += "  const blockEl = document.querySelector(`[data-block='${blockId}']`);";
-    html += "  const nextSibling = blockEl.nextElementSibling;";
-    html += "  if (nextSibling) {";
-    html += "    blockEl.parentNode.insertBefore(nextSibling, blockEl);";
-    html += "    updateBlockNumbers();";
-    html += "  }";
-    html += "}";
-    
-    html += "function clearProgram() {";
-    html += "  if (confirm('Are you sure you want to clear the entire program?')) {";
-    html += "    document.getElementById('program-blocks').innerHTML = '';";
-    html += "    currentBlocks = [];";
-    html += "    blockCounter = 0;";
-    html += "  }";
-    html += "}";
-    
-    html += "function toggleMicThreshold() {";
-    html += "  const checkbox = document.getElementById('wait-mic-trigger');";
-    html += "  const thresholdGroup = document.getElementById('mic-threshold-group');";
-    html += "  thresholdGroup.style.display = checkbox.checked ? 'block' : 'none';";
-    html += "}";
-    
-    html += "function saveProgram() {";
-    html += "  const programName = document.getElementById('program-name').value.trim();";
-    html += "  if (!programName) {";
-    html += "    alert('Please enter a program name');";
-    html += "    return;";
-    html += "  }";
-    html += "  if (currentBlocks.length === 0) {";
-    html += "    alert('Please add at least one pair block');";
-    html += "    return;";
-    html += "  }";
-    
-    html += "  const programData = {";
-    html += "    name: programName,";
-    html += "    loopEnabled: document.getElementById('loop-enabled').checked,";
-    html += "    waitForMicTrigger: document.getElementById('wait-mic-trigger').checked,";
-    html += "    micThreshold: parseFloat(document.getElementById('mic-threshold').value) || " + String(micDbThreshold, 1) + ",";
-    html += "    blocks: currentBlocks.map((block, index) => ({";
-    html += "      pairId: block.pairId,";
-    html += "      delayMs: block.delayMs,";
-    html += "      waitForInput: block.waitForInput";
-    html += "    }))";
-    html += "  };";
-    
-    html += "  fetch('/save-program', {";
-    html += "    method: 'POST',";
-    html += "    headers: { 'Content-Type': 'application/json' },";
-    html += "    body: JSON.stringify(programData)";
-    html += "  }).then(response => {";
-    html += "    if (response.ok) {";
-    html += "      alert('Program saved successfully!');";
-    html += "      loadProgramListDebounced();";
-    html += "    } else {";
-    html += "      alert('Failed to save program');";
-    html += "    }";
-    html += "  });";
-    html += "}";
-    
-    html += "function loadProgramList() {";
-    html += "  console.log('Loading program list...');";
-    html += "  fetch('/program-list')";
-    html += "    .then(response => {";
-    html += "      console.log('Program list response status:', response.status);";
-    html += "      return response.json();";
-    html += "    })";
-    html += "    .then(data => {";
-    html += "      console.log('Program list data received:', data);";
-    html += "      const listDiv = document.getElementById('program-list');";
-    html += "      listDiv.innerHTML = '';";
-    html += "      if (data.programs && data.programs.length > 0) {";
-    html += "        data.programs.forEach(program => {";
-    html += "        const item = document.createElement('div');";
-    html += "        item.className = 'program-item';";
-    html += "        item.innerHTML = `";
-    html += "          <span>${program}</span>";
-    html += "          <div>";
-    html += "            <button class='btn btn-secondary' onclick='loadProgram(\"${program}\")'>Load</button>";
-    html += "            <button class='btn btn-danger' onclick='deleteProgram(\"${program}\")'>Delete</button>";
-    html += "            <button class='btn' onclick='executeProgram(\"${program}\")'>Execute</button>";
-    html += "          </div>";
-    html += "        `;";
-    html += "        listDiv.appendChild(item);";
-    html += "      });";
-    html += "      } else {";
-    html += "        listDiv.innerHTML = '<p>No saved programs found. Create and save a program to see it here.</p>';";
-    html += "        console.log('No programs found in data');";
-    html += "      }";
-    html += "    })";
-    html += "    .catch(error => {";
-    html += "      console.error('Error loading program list:', error);";
-    html += "      document.getElementById('program-list').innerHTML = '<p>Error loading programs</p>';";
-    html += "    });";
-    html += "}";
-    
-    html += "function loadProgramListDebounced() {";
-    html += "  if (loadProgramListTimeout) clearTimeout(loadProgramListTimeout);";
-    html += "  loadProgramListTimeout = setTimeout(loadProgramList, 300);"; // 300ms debounce
-    html += "}";
-    
-    html += "function loadProgram(programName) {";
-    html += "  fetch(`/load-program?name=${encodeURIComponent(programName)}`)";
-    html += "    .then(response => response.text())";
-    html += "    .then(data => {";
-    html += "      try {";
-    html += "        const program = JSON.parse(data);";
-    html += "        document.getElementById('program-name').value = program.name;";
-    html += "        document.getElementById('loop-enabled').checked = program.loopEnabled;";
-    html += "        document.getElementById('wait-mic-trigger').checked = program.waitForMicTrigger || false;";
-    html += "        document.getElementById('mic-threshold').value = program.micThreshold || " + String(micDbThreshold, 1) + ";";
-    html += "        toggleMicThreshold();"; // Show/hide mic threshold input
-    html += "        clearProgram();";
-    html += "        if (program.blocks) {";
-    html += "          program.blocks.forEach(block => {";
-    html += "            addBlock(block.pairId);";
-    html += "            const lastBlock = currentBlocks[currentBlocks.length - 1];";
-    html += "            lastBlock.delayMs = block.delayMs;";
-    html += "            lastBlock.waitForInput = block.waitForInput;";
-    html += "            document.getElementById(`delay-${lastBlock.blockId}`).value = block.delayMs;";
-    html += "            document.getElementById(`wait-${lastBlock.blockId}`).value = block.waitForInput;";
-    html += "          });";
-    html += "        }";
-    html += "        alert('Program loaded successfully!');";
-    html += "      } catch (e) {";
-    html += "        alert('Failed to load program');";
-    html += "      }";
-    html += "    });";
-    html += "}";
-    
-    html += "function deleteProgram(programName) {";
-    html += "  if (confirm(`Are you sure you want to delete '${programName}'?`)) {";
-    html += "    fetch(`/delete-program?name=${encodeURIComponent(programName)}`)";
-    html += "      .then(response => {";
-    html += "        if (response.ok) {";
-    html += "          alert('Program deleted successfully!');";
-    html += "          loadProgramListDebounced();";
-    html += "        } else {";
-    html += "          alert('Failed to delete program');";
-    html += "        }";
-    html += "      });";
-    html += "  }";
-    html += "}";
-    
-    html += "function executeProgram(programName) {";
-    html += "  if (confirm(`Execute program '${programName}'?`)) {";
-    html += "    window.location.href = `/execute-program?name=${encodeURIComponent(programName)}`;";
-    html += "  }";
-    html += "}";
-    
-    html += "window.onload = function() { loadProgramList(); };";
-    html += "</script>";
-    html += "</head><body>";
-    
-    html += "<div class='container'>";
-    html += "<h1>Pair-Based Program Editor</h1>";
-    html += "<a href='/' class='btn btn-secondary'>← Back to Home</a>";
-    
-    html += "<div class='safety-info'>";
-    html += "<h3>How Target Programs Work:</h3>";
-    html += "<ul>";
-    html += "<li><strong>Pair 0:</strong> Relays 0-1 (Motor pair 1)</li>";
-    html += "<li><strong>Pair 1:</strong> Relays 2-3 (Motor pair 2)</li>";
-    html += "<li><strong>Pair 2:</strong> Relays 4-5 (Motor pair 3)</li>";
-    html += "</ul>";
-    html += "<p><strong>Block Operation:</strong> First relay activates → Wait for input → Apply delay → Second relay activates → Wait for input → Move to next block</p>";
-    html += "</div>";
-    
-    html += "<div class='form-group'>";
-    html += "<label for='program-name'>Program Name:</label>";
-    html += "<input type='text' id='program-name' placeholder='Enter program name' style='width: 200px; padding: 8px;'>";
-    html += "</div>";
-    
-    html += "<div class='form-group'>";
-    html += "<label for='loop-enabled'>Loop Program:</label>";
-    html += "<input type='checkbox' id='loop-enabled'> <small>(Restart from beginning when complete)</small>";
-    html += "</div>";
-    
-    html += "<div class='form-group'>";
-    html += "<label for='wait-mic-trigger'>Wait for Microphone Trigger:</label>";
-    html += "<input type='checkbox' id='wait-mic-trigger' onchange='toggleMicThreshold()'> <small>(Program waits for sound before starting)</small>";
-    html += "</div>";
-    
-    html += "<div class='form-group' id='mic-threshold-group' style='display: none;'>";
-    html += "<label for='mic-threshold'>Microphone Threshold (dBA):</label>";
-    html += "<input type='number' id='mic-threshold' min='20' max='120' step='0.1' value='" + String(micDbThreshold, 1) + "' style='width: 100px; padding: 8px;'>";
-    html += "<small> Current global threshold: " + String(micDbThreshold, 1) + " dBA</small>";
-    html += "</div>";
-    
-    html += "<h3>Available Motor Targets</h3>";
-    html += "<p>Drag a motor target below to add it to your program:</p>";
-    html += "<div style='margin: 20px 0;'>";
-    html += "<div class='target-item' draggable='true' ondragstart='drag(event)' data-pair='0'>";
-    html += "<h4>Target 0</h4>";
-    html += "<div class='relays'>Relays 0-1</div>";
-    html += "</div>";
-    html += "<div class='target-item' draggable='true' ondragstart='drag(event)' data-pair='1'>";
-    html += "<h4>Target 1</h4>";
-    html += "<div class='relays'>Relays 2-3</div>";
-    html += "</div>";
-    html += "<div class='target-item' draggable='true' ondragstart='drag(event)' data-pair='2'>";
-    html += "<h4>Target 2</h4>";
-    html += "<div class='relays'>Relays 4-5</div>";
-    html += "</div>";
-    html += "</div>";
-    
-    html += "<h3>Program Blocks</h3>";
-    html += "<div class='editor-section' ondrop='drop(event)' ondragover='allowDrop(event)'>";
-    html += "<p style='text-align: center; color: #666;'>Drop motor pairs here to build your program</p>";
-    html += "<div id='program-blocks'></div>";
-    html += "</div>";
-    
-    html += "<div style='margin: 20px 0;'>";
-    html += "<button class='btn' onclick='saveProgram()'>Save Program</button>";
-    html += "<button class='btn btn-warning' onclick='clearProgram()'>Clear All</button>";
-    html += "</div>";
-    
-    html += "<div class='program-list'>";
-    html += "<h3>Saved Programs</h3>";
-    html += "<div id='program-list'></div>";
-    html += "</div>";
-    
-    html += "</div>";
-    html += "</body></html>";
-
-    request->send(200, "text/html", html);
-  });
-
-  // Save program endpoint
-  server.on("/save-program", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
-    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-      String body = "";
-      for (size_t i = 0; i < len; i++) {
-        body += (char)data[i];
-      }
-      
-      // Simple JSON parsing (since ArduinoJson might not be available)
-      if (validatePairProgramSafety(body)) {
-        // Extract program name from JSON manually
-        int nameStart = body.indexOf("\"name\":\"") + 8;
-        int nameEnd = body.indexOf("\"", nameStart);
-        String programName = body.substring(nameStart, nameEnd);
-        
-        if (savePairProgram(programName, body)) {
-          request->send(200, "text/plain", "Program saved successfully");
-        } else {
-          request->send(500, "text/plain", "Failed to save program");
-        }
-      } else {
-        request->send(400, "text/plain", "Program violates safety rules");
-      }
-    });
-
-  // Load program endpoint
-  server.on("/load-program", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("name")) {
-      String programName = request->getParam("name")->value();
-      String programData = loadPairProgram(programName);
-      if (programData.length() > 0) {
-        request->send(200, "application/json", programData);
-      } else {
-        request->send(404, "text/plain", "Program not found");
-      }
-    } else {
-      request->send(400, "text/plain", "Program name required");
-    }
-  });
-
-  // Program list endpoint
-  server.on("/program-list", HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("Program list endpoint called");
-    String response = getPairProgramList();
-    Serial.println("Sending response: " + response);
-    request->send(200, "application/json", response);
-  });
-
-  // Delete program endpoint
-  server.on("/delete-program", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("name")) {
-      String programName = request->getParam("name")->value();
-      if (deletePairProgram(programName)) {
-        request->send(200, "text/plain", "Program deleted successfully");
-      } else {
-        request->send(500, "text/plain", "Failed to delete program");
-      }
-    } else {
-      request->send(400, "text/plain", "Program name required");
-    }
-  });
-
-  // Execute pair program endpoint
-  server.on("/execute-program", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("name")) {
-      String programName = request->getParam("name")->value();
-      String programData = loadPairProgram(programName);
-      if (programData.length() > 0) {
-        // Parse JSON data to load pair program
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, programData);
-        
-        if (error) {
-          request->send(400, "text/plain", "Invalid program format");
-          return;
-        }
-        
-        // Load program into currentPairProgram structure
-        currentPairProgram.name = doc["name"].as<String>();
-        currentPairProgram.loopEnabled = doc["loopEnabled"].as<bool>();
-        currentPairProgram.waitForMicTrigger = doc["waitForMicTrigger"] | false; // Default to false
-        currentPairProgram.micThreshold = doc["micThreshold"] | micDbThreshold; // Default to global mic threshold
-        
-        JsonArray blocks = doc["blocks"];
-        currentPairProgram.blockCount = min((int)blocks.size(), 10); // Limit to 10 blocks
-        
-        for (int i = 0; i < currentPairProgram.blockCount; i++) {
-          currentPairProgram.blocks[i].pairId = blocks[i]["pairId"];
-          currentPairProgram.blocks[i].delayMs = blocks[i]["delayMs"];
-          currentPairProgram.blocks[i].waitForInput = blocks[i]["waitForInput"];
-        }
-        
-        // Start pair program execution
-        currentMode = MODE_CUSTOM;
-        
-        // Check if program waits for mic trigger
-        if (currentPairProgram.waitForMicTrigger) {
-          waitingForCustomMicTrigger = true;
-          pairProgramRunning = false; // Don't start yet, wait for mic
-          Serial.println("Custom program loaded, waiting for mic trigger (threshold: " + String(currentPairProgram.micThreshold) + ")");
-        } else {
-          pairProgramRunning = true; // Start immediately
-          waitingForCustomMicTrigger = false;
-        }
-        
-        currentBlockIndex = 0;
-        currentPairState = PAIR_IDLE;
-        activePairId = -1;
-        
-        // Turn off all relays first
-        for (int i = 0; i < 6; i++) {
-          relays.digitalWrite(i, HIGH);
-          inputTimeoutActive[i] = false;
-        }
-        
-        Serial.println("Starting pair program: " + currentPairProgram.name);
-        Serial.println("Blocks: " + String(currentPairProgram.blockCount));
-        
-        String html = "<!DOCTYPE html><html><head>";
-        html += "<meta http-equiv='refresh' content='3;url=/' />";
-        html += "<title>Program Started</title></head><body>";
-        html += "<h2>Target Program '" + currentPairProgram.name + "' started successfully</h2>";
-        html += "<p>Blocks: " + String(currentPairProgram.blockCount) + "</p>";
-        html += "<p>Loop enabled: " + String(currentPairProgram.loopEnabled ? "Yes" : "No") + "</p>";
-        html += "<p>Redirecting back to home page...</p>";
-        html += "</body></html>";
-        
-        request->send(200, "text/html", html);
-      } else {
-        request->send(404, "text/plain", "Program not found");
-      }
-    } else {
-      request->send(400, "text/plain", "Program name required");
-    }
-  });
-
   // Mode switching endpoint
   server.on("/set-mode", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (request->hasParam("mode")) {
       String mode = request->getParam("mode")->value();
       
       // Stop all current operations first
-      stopPairProgram();
       stopCompetitionMode();
       for (int i = 0; i < 6; i++) {
         relays.digitalWrite(i, HIGH);
@@ -1540,8 +943,6 @@ void setup() {
       
       if (mode == "sequence") {
         currentMode = MODE_SEQUENCE;
-      } else if (mode == "custom") {
-        currentMode = MODE_CUSTOM;
       } else if (mode == "competition") {
         currentMode = MODE_ZAWODY;
       } else if (mode == "manual") {
@@ -1561,20 +962,6 @@ void setup() {
     } else {
       request->send(400, "text/plain", "Mode parameter required");
     }
-  });
-
-  // Stop custom program endpoint
-  server.on("/stop-program", HTTP_GET, [](AsyncWebServerRequest *request) {
-    stopPairProgram();
-    
-    String html = "<!DOCTYPE html><html><head>";
-    html += "<meta http-equiv='refresh' content='2;url=/' />";
-    html += "<title>Program Stopped</title></head><body>";
-    html += "<h2>Custom program stopped</h2>";
-    html += "<p>Redirecting back to home page...</p>";
-    html += "</body></html>";
-    
-    request->send(200, "text/html", html);
   });
 
   // Competition mode endpoints
@@ -1870,52 +1257,56 @@ void loop() {
     return;
   }
   
-  // Test DFRobot Gravity sound level meter on analog pin 4 (GPIO 35)
-  // Check microphone only when waiting for competition mic trigger or custom program mic trigger
-  if ((currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) || 
-      (waitingForCustomMicTrigger && currentMode == MODE_CUSTOM)) {
-    static unsigned long lastMicCheck = 0;
-    static bool debugPrinted = false;
-    
-    // Debug info once when condition is met
-    if (!debugPrinted && currentMode == MODE_ZAWODY) {
-      Serial.println("DEBUG: Mic checking active for competition - systemState=" + String(systemState) + ", waitingForMicTrigger=" + String(competitionState.waitingForMicTrigger));
-      debugPrinted = true;
-    }
-    
-    if (millis() - lastMicCheck >= 125) { // Check every 125ms as per DFRobot sample
-      float voltageValue, dbValue;
-      // ESP32 uses 12-bit ADC (0-4095) and 3.3V reference instead of Arduino's 10-bit (0-1023) and 5V
-      voltageValue = analogRead(ANALOG_A1) / 4095.0 * 3.3; // Convert to voltage (ESP32 specific)
-      dbValue = voltageValue * 50.0; // Convert voltage to decibel value as per DFRobot formula
-      Serial.print("Sound Level: ");
-      Serial.print(dbValue, 1);
-      Serial.print(" dBA (");
-      Serial.print(voltageValue, 2);
-      Serial.println("V)");
-      
-      // Check if we're waiting for mic trigger for custom program
-      if (waitingForCustomMicTrigger && currentMode == MODE_CUSTOM) {
-        if (dbValue >= currentPairProgram.micThreshold) {
-          Serial.println("Custom program mic trigger activated! dB: " + String(dbValue, 1) + " >= " + String(currentPairProgram.micThreshold, 1) + " (program threshold)");
-          Serial.println("Starting custom program: " + currentPairProgram.name);
-          waitingForCustomMicTrigger = false;
-          pairProgramRunning = true;
-        }
-      }
-      // Check if we're waiting for mic trigger for competition mode
-      else if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
-        Serial.println("DEBUG: Checking competition mic trigger - dB=" + String(dbValue, 1) + ", threshold=" + String(competitionSettings.micTriggerThreshold, 1));
+  // Fast microphone sampling for immediate trigger (competition mode)
+  // Use fast peak-detection window and immediate trigger to reduce latency
+  if (currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) {
+    // Tunables
+    const uint32_t FAST_SAMPLE_INTERVAL_US = 2000;   // ~2 ms between samples
+    const uint32_t PEAK_WINDOW_MS = 20;              // 20 ms short-time peak window
+
+    static uint32_t lastSampleUs = 0;
+    static uint32_t windowStartUs = 0;
+    static float peakDb = 0.0f;
+    static uint32_t lastDebugMs = 0;
+
+    uint32_t nowUs = micros();
+    if (windowStartUs == 0) windowStartUs = nowUs;
+
+    // sample as fast as configured
+    if ((nowUs - lastSampleUs) >= FAST_SAMPLE_INTERVAL_US) {
+      // Read and convert to approximate dB value (module-specific)
+      float voltageValue = analogRead(ANALOG_A1) / 4095.0f * 3.3f; // ESP32 ADC
+      float dbValue = voltageValue * 50.0f; // Linear approximation used previously
+
+      // Track peak within a short window to catch impulses (gunshot)
+      if (dbValue > peakDb) peakDb = dbValue;
+
+      // Immediate trigger on any sample meeting threshold (lowest latency)
+      if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
         if (dbValue >= competitionSettings.micTriggerThreshold) {
-          Serial.println("Competition mic trigger activated! dB: " + String(dbValue, 1) + " >= " + String(competitionSettings.micTriggerThreshold, 1) + " (competition threshold)");
-          Serial.println("Starting competition...");
           competitionState.waitingForMicTrigger = false;
           competitionState.isRunning = true;
           competitionState.timerStart = millis();
+          Serial.println("Competition mic trigger! dB: " + String(dbValue, 1) +
+                         " >= " + String(competitionSettings.micTriggerThreshold, 1));
         }
       }
-      
-      lastMicCheck = millis();
+
+      // End of peak window: optional debug print and reset
+      uint32_t nowMs = millis();
+      if ((nowUs - windowStartUs) >= (PEAK_WINDOW_MS * 1000UL)) {
+        // Throttle debug output to ~4 Hz while waiting (lightweight)
+        if (nowMs - lastDebugMs >= 250) {
+          if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
+            Serial.println("Mic peak " + String(peakDb, 1) + " dBA (thr " + String(competitionSettings.micTriggerThreshold, 1) + ")");
+          }
+          lastDebugMs = nowMs;
+        }
+        peakDb = 0.0f;
+        windowStartUs = nowUs;
+      }
+
+      lastSampleUs = nowUs;
     }
   }
   
@@ -1979,9 +1370,6 @@ void loop() {
         delay(10);
       }
     }
-  } else if (currentMode == MODE_CUSTOM && pairProgramRunning) {
-    // Pair-based program execution logic
-    executePairProgram();
   } else if (currentMode == MODE_ZAWODY) {
     // Competition mode logic
     // Check for mic trigger if waiting
@@ -1999,7 +1387,10 @@ void loop() {
     executeManualMode();
   }
   
-  delay(10);
+  // Avoid artificial delay while we're waiting for a mic trigger to ensure lowest latency
+  if (!(currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger)) {
+    delay(10);
+  }
 }
 
 // Function to get a random delay in milliseconds for a specific relay
@@ -2208,285 +1599,6 @@ bool validateProgramSafety(const String& programData) {
   }
   
   Serial.println("Program safety validation passed");
-  return true;
-}
-
-// Helper functions for pair-based operations
-int getPairFirstRelay(int pairId) {
-  return pairId * 2; // Returns 0, 2, 4
-}
-
-int getPairSecondRelay(int pairId) {
-  return pairId * 2 + 1; // Returns 1, 3, 5
-}
-
-void executePairProgram() {
-  if (!pairProgramRunning || currentPairProgram.blockCount == 0) {
-    return;
-  }
-
-  MotorPairBlock& currentBlock = currentPairProgram.blocks[currentBlockIndex];
-  
-  // Declare variables outside switch to avoid scope issues
-  int firstRelay, secondRelay;
-  
-  switch (currentPairState) {
-    case PAIR_IDLE:
-      // Start the current block - activate first relay of the pair
-      activePairId = currentBlock.pairId;
-      firstRelay = getPairFirstRelay(activePairId);
-      
-      // Safety check: ensure no relay from same pair is already on
-      secondRelay = getPairSecondRelay(activePairId);
-      if (relays.digitalRead(secondRelay) == LOW) {
-        // Safety violation - stop program
-        Serial.println("Safety violation: Relay " + String(secondRelay) + " already active in pair " + String(activePairId));
-        stopPairProgram();
-        return;
-      }
-      
-      // Activate first relay
-      safeRelayWrite(firstRelay, LOW);
-      startInputTimeout(firstRelay);
-      currentPairState = PAIR_FIRST_RELAY;
-      pairStateStartTime = millis();
-      systemState = SYSTEM_RUNNING;
-      
-      Serial.println("Pair program block " + String(currentBlockIndex) + ": Starting pair " + String(activePairId) + ", activated relay " + String(firstRelay));
-      break;
-      
-    case PAIR_FIRST_RELAY:
-      // Wait for input on first relay
-      firstRelay = getPairFirstRelay(activePairId);
-      if (safeInputRead(firstRelay) == LOW && relays.digitalRead(firstRelay) == LOW) {
-        // Input detected on first relay
-        stopInputTimeout(firstRelay);
-        safeRelayWrite(firstRelay, HIGH);
-        
-        // Start delay period
-        currentPairState = PAIR_DELAY;
-        pairDelayStartTime = millis();
-        
-        Serial.println("Pair " + String(activePairId) + ": First relay input detected, starting delay of " + String(currentBlock.delayMs) + "ms");
-      }
-      break;
-      
-    case PAIR_DELAY:
-      // Wait for delay to complete
-      if (millis() - pairDelayStartTime >= currentBlock.delayMs) {
-        // Delay complete, activate second relay
-        secondRelay = getPairSecondRelay(activePairId);
-        safeRelayWrite(secondRelay, LOW);
-        startInputTimeout(secondRelay);
-        currentPairState = PAIR_SECOND_RELAY;
-        
-        Serial.println("Pair " + String(activePairId) + ": Delay complete, activated relay " + String(secondRelay));
-      }
-      break;
-      
-    case PAIR_SECOND_RELAY:
-      // Wait for input on second relay
-      secondRelay = getPairSecondRelay(activePairId);
-      if (safeInputRead(secondRelay) == LOW && relays.digitalRead(secondRelay) == LOW) {
-        // Input detected on second relay
-        stopInputTimeout(secondRelay);
-        safeRelayWrite(secondRelay, HIGH);
-        currentPairState = PAIR_COMPLETE;
-        
-        Serial.println("Pair " + String(activePairId) + ": Second relay input detected, block complete");
-      }
-      break;
-      
-    case PAIR_COMPLETE:
-      // Move to next block
-      currentBlockIndex++;
-      
-      if (currentBlockIndex >= currentPairProgram.blockCount) {
-        // Program complete
-        if (currentPairProgram.loopEnabled) {
-          currentBlockIndex = 0; // Loop back to start
-          currentPairState = PAIR_IDLE;
-          Serial.println("Pair program loop: restarting from block 0");
-        } else {
-          stopPairProgram(); // Program complete
-          Serial.println("Pair program completed");
-          return;
-        }
-      } else {
-        // Move to next block
-        currentPairState = PAIR_IDLE;
-        Serial.println("Moving to next block: " + String(currentBlockIndex));
-      }
-      break;
-  }
-}
-
-void stopPairProgram() {
-  pairProgramRunning = false;
-  currentPairState = PAIR_IDLE;
-  currentBlockIndex = 0;
-  activePairId = -1;
-  
-  // Turn off all relays
-  for (int i = 0; i < 6; i++) {
-    relays.digitalWrite(i, HIGH);
-    inputTimeoutActive[i] = false;
-  }
-  
-  systemState = SYSTEM_STOPPED;
-  Serial.println("Pair program stopped");
-}
-
-bool checkRelayPairSafety(int relay1, int relay2) {
-  // Check if two relays are from the same motor pair
-  int pair1 = relay1 / 2;
-  int pair2 = relay2 / 2;
-  
-  return pair1 != pair2; // Safe if from different pairs
-}
-
-// Pair program management functions - basic implementations
-bool savePairProgram(const String& programName, const String& programData) {
-  String filename = "/program_" + programName + ".json";
-  
-  Serial.println("Saving pair program to: " + filename);
-  
-  File file = SPIFFS.open(filename, "w");
-  if (!file) {
-    Serial.println("Failed to create program file: " + filename);
-    return false;
-  }
-  
-  file.print(programData);
-  file.close();
-  
-  Serial.println("Pair program saved: " + programName);
-  return true;
-}
-
-String loadPairProgram(const String& programName) {
-  String filename = "/program_" + programName + ".json";
-  
-  if (!SPIFFS.exists(filename)) {
-    Serial.println("Pair program file not found: " + filename);
-    return "";
-  }
-  
-  File file = SPIFFS.open(filename, "r");
-  if (!file) {
-    Serial.println("Failed to open pair program file: " + filename);
-    return "";
-  }
-  
-  String content = file.readString();
-  file.close();
-  
-  Serial.println("Pair program loaded: " + programName);
-  return content;
-}
-
-String getPairProgramList() {
-  // Return JSON object with programs array for compatibility with frontend
-  String json = "{\"programs\":[";
-  bool first = true;
-  
-  Serial.println("Getting pair program list...");
-  
-  File root = SPIFFS.open("/");
-  if (root && root.isDirectory()) {
-    Serial.println("SPIFFS root directory found");
-    File file = root.openNextFile();
-    while (file) {
-      if (!file.isDirectory()) {
-        String filename = file.name();
-        Serial.println("Found file: " + filename);
-        // Look for files starting with "program_" and ending with ".json"
-        Serial.println("Checking if '" + filename + "' starts with 'program_': " + String(filename.startsWith("program_")));
-        Serial.println("Checking if '" + filename + "' ends with '.json': " + String(filename.endsWith(".json")));
-        if (filename.startsWith("program_") && filename.endsWith(".json")) {
-          Serial.println("File matches criteria!");
-          if (!first) json += ",";
-          // Extract program name from filename (remove "program_" and ".json")
-          String programName = filename.substring(8); // Remove "program_" (8 characters)
-          programName.replace(".json", ""); // Remove ".json"
-          Serial.println("Extracted program name: '" + programName + "'");
-          json += "\"" + programName + "\"";
-          first = false;
-          Serial.println("Added program: " + programName);
-        } else {
-          Serial.println("File does not match criteria, skipping");
-        }
-      }
-      file = root.openNextFile();
-    }
-    root.close();
-  } else {
-    Serial.println("SPIFFS root directory not found or not accessible");
-  }
-  
-  json += "]}";
-  Serial.println("Program list JSON: " + json);
-  return json;
-}
-
-bool deletePairProgram(const String& programName) {
-  String filename = "/program_" + programName + ".json";
-  
-  if (!SPIFFS.exists(filename)) {
-    Serial.println("Pair program file not found: " + filename);
-    return false;
-  }
-  
-  bool success = SPIFFS.remove(filename);
-  if (success) {
-    Serial.println("Pair program deleted: " + programName);
-  } else {
-    Serial.println("Failed to delete pair program: " + programName);
-  }
-  
-  return success;
-}
-
-bool validatePairProgramSafety(const String& programData) {
-  // Parse JSON to validate pair program safety
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, programData);
-  
-  if (error) {
-    Serial.println("Invalid JSON format in pair program");
-    return false;
-  }
-  
-  if (!doc["blocks"].is<JsonArray>()) {
-    Serial.println("Pair program missing blocks array");
-    return false;
-  }
-  
-  JsonArray blocks = doc["blocks"];
-  
-  // Check each block for safety violations
-  for (size_t i = 0; i < blocks.size(); i++) {
-    JsonObject block = blocks[i];
-    
-    if (!block["pairId"].is<int>() || !block["delayMs"].is<int>() || !block["waitForInput"].is<bool>()) {
-      Serial.println("Invalid block format at index " + String(i));
-      return false;
-    }
-    
-    int pairId = block["pairId"];
-    if (pairId < 0 || pairId > 2) {
-      Serial.println("Invalid pair ID " + String(pairId) + " at block " + String(i) + " (must be 0-2)");
-      return false;
-    }
-    
-    int delayMs = block["delayMs"];
-    if (delayMs < 100 || delayMs > 60000) {
-      Serial.println("Invalid delay " + String(delayMs) + " at block " + String(i) + " (must be 100-60000ms)");
-      return false;
-    }
-  }
-  
-  Serial.println("Pair program safety validation passed");
   return true;
 }
 
