@@ -566,8 +566,6 @@ void setup() {
     html += "border-left: 4px solid #4CAF50; }";
     html += ".status-on { border-left-color: #f44336; background-color: #ffe6e6; }";
     html += ".status-off { border-left-color: #4CAF50; background-color: #e6ffe6; }";
-    html += ".motor-pair { background-color: #e3f2fd; border: 1px solid #1976d2; ";
-    html += "margin: 10px 0; padding: 15px; border-radius: 8px; }";
     html += ".warning { color: #ff6b35; font-weight: bold; }";
     html += ".success { color: #4CAF50; font-weight: bold; }";
     html += ".relay-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }";
@@ -607,7 +605,6 @@ void setup() {
         break;
     }
     html += "</p>";
-    html += "<p><strong>Microphone Threshold:</strong> <span id='mic-threshold'>" + String(micDbThreshold, 1) + " dBA</span></p>";
     if (currentMode == MODE_ZAWODY) {
       if (competitionState.waitingForMicTrigger) {
         html += "<p><strong>Status:</strong> <span style='color: #ff9800;'>Competition ready - waiting for mic trigger (" + String(competitionSettings.micTriggerThreshold, 1) + " dBA)</span></p>";
@@ -637,7 +634,9 @@ void setup() {
     html += "<a href='/start-manual' class='btn " + String(currentMode == MODE_MANUAL ? "btn-stop" : "") + "' style='background-color: #ff5722;'>Manual Mode</a>";
     html += "</div>";
     html += "<div class='button-group' style='margin-top: 15px;'>";
+    html += "<a href='/sequence-settings' class='btn btn-clear' style='background-color: #2196f3;'>Sequence Settings</a>";
     html += "<a href='/competition-settings' class='btn btn-clear' style='background-color: #673ab7;'>Competition Settings</a>";
+    html += "<a href='/safety-settings' class='btn btn-clear' style='background-color: #ff9800;'>Safety Settings</a>";
     html += "</div>";
     html += "</div>";
 
@@ -704,82 +703,6 @@ void setup() {
       html += "</script>";
     }
     
-    // Motor Pair Status
-    html += "<h3>Motor Pair Status</h3>";
-    for (int pair = 0; pair < 3; pair++) {
-      int relay1 = pair * 2;
-      int relay2 = pair * 2 + 1;
-      html += "<div class='motor-pair'>";
-      html += "<h4>Motor Pair " + String(pair + 1) + " (Relays " + String(relay1) + " & " + String(relay2) + ")</h4>";
-      html += "<div style='display: flex; justify-content: space-around;'>";
-      html += "<div class='status-item " + String(relays.digitalRead(relay1) == LOW ? "status-on" : "status-off") + "'>";
-      html += "Relay " + String(relay1) + ": " + (relays.digitalRead(relay1) == LOW ? "ON" : "OFF");
-      html += "</div>";
-      html += "<div class='status-item " + String(relays.digitalRead(relay2) == LOW ? "status-on" : "status-off") + "'>";
-      html += "Relay " + String(relay2) + ": " + (relays.digitalRead(relay2) == LOW ? "ON" : "OFF");
-      html += "</div>";
-      html += "</div>";
-      html += "</div>";
-    }
-    html += "</div>";
-
-    // Enhanced delay configuration
-    html += "<div class='card'>";
-    html += "<h2>Delay Configuration</h2>";
-    html += "<div class='relay-config'>";
-    for (int i = 0; i < 6; i++) {
-      html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
-      html += "<h3>Relay " + String(i) + "</h3>";
-      html += "<form action='/set-delay' method='get'>";
-      html += "<input type='hidden' name='relay' value='" + String(i) + "'>";
-      html += "<div class='form-group'>";
-      html += "<label for='min'>Min Delay (ms):</label>";
-      html += "<input type='number' id='min' name='min' min='100' max='10000' value='" + String(minDelayRelay[i]) + "' required>";
-      html += "</div>";
-      html += "<div class='form-group'>";
-      html += "<label for='max'>Max Delay (ms):</label>";
-      html += "<input type='number' id='max' name='max' min='100' max='20000' value='" + String(maxDelayRelay[i]) + "' required>";
-      html += "</div>";
-      html += "<input type='submit' class='btn' value='Save Settings' style='width: 100%;'>";
-      html += "</form>";
-      html += "<p><small>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</small></p>";
-      html += "</div>";
-    }
-    html += "</div>";
-    html += "</div>";
-
-    // Safety Timeout Configuration
-    html += "<div class='card'>";
-    html += "<h2>Safety Configuration</h2>";
-    html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
-    html += "<h3>Safety Timeout</h3>";
-    html += "<p>Current timeout: <strong>" + String(safetyTimeoutMs) + "ms</strong></p>";
-    html += "<p><small>If a relay doesn't receive its corresponding input signal within this time, all relays will be turned off for safety.</small></p>";
-    html += "<form action='/set-safety-timeout' method='get'>";
-    html += "<div class='form-group'>";
-    html += "<label for='timeout'>Timeout (ms):</label>";
-    html += "<input type='number' id='timeout' name='timeout' min='500' max='10000' value='" + String(safetyTimeoutMs) + "' required>";
-    html += "</div>";
-    html += "<input type='submit' class='btn' value='Update Safety Timeout' style='width: 100%;'>";
-    html += "</form>";
-    html += "</div>";
-    html += "</div>";
-
-    // Microphone Configuration
-    html += "<div class='card'>";
-    html += "<h2>Microphone Configuration</h2>";
-    html += "<div style='border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: white;'>";
-    html += "<h3>Sound Trigger Threshold</h3>";
-    html += "<p>Current threshold: <strong>" + String(micDbThreshold, 1) + " dBA</strong></p>";
-    html += "<p><small>This threshold setting is maintained for compatibility. Competition mode has its own threshold setting.</small></p>";
-    html += "<form action='/set-mic-threshold' method='get'>";
-    html += "<div class='form-group'>";
-    html += "<label for='threshold'>Threshold (dBA):</label>";
-    html += "<input type='number' id='threshold' name='threshold' min='20' max='120' step='0.1' value='" + String(micDbThreshold, 1) + "' required>";
-    html += "</div>";
-    html += "<input type='submit' class='btn' value='Update Microphone Threshold' style='width: 100%;'>";
-    html += "</form>";
-    html += "</div>";
     html += "</div>";
 
     // Add JavaScript to load configuration data
@@ -788,11 +711,7 @@ void setup() {
     html += "  fetch('/config')";
     html += "    .then(response => response.json())";
     html += "    .then(config => {";
-    html += "      // Update the displayed microphone threshold";
-    html += "      const micElement = document.getElementById('mic-threshold');";
-    html += "      if (micElement) {";
-    html += "        micElement.textContent = config.micDbThreshold + ' dBA';";
-    html += "      }";
+    html += "      // Configuration loaded successfully";
     html += "    })";
     html += "    .catch(error => console.log('Failed to load config:', error));";
     html += "}";
@@ -1232,6 +1151,136 @@ void setup() {
     html += "<a href='/' class='btn btn-secondary'>Back to Home</a>";
     html += "</div>";
     html += "</form></div></body></html>";
+    
+    request->send(200, "text/html", html);
+  });
+
+  // Sequence settings page
+  server.on("/sequence-settings", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+    html += "<title>Sequence Settings</title>";
+    html += "<style>";
+    html += "* { box-sizing: border-box; }";
+    html += "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; ";
+    html += "margin: 0; padding: 15px; background-color: #f5f5f5; font-size: 16px; line-height: 1.4; }";
+    html += ".container { max-width: 800px; margin: 0 auto; background-color: white; ";
+    html += "border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }";
+    html += "h1 { color: #333; margin: 0 0 20px 0; text-align: center; font-size: clamp(1.5rem, 4vw, 2.2rem); }";
+    html += "h2, h3 { color: #555; margin: 25px 0 15px 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 5px; }";
+    html += ".form-group { margin: 15px 0; }";
+    html += "label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }";
+    html += "input { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 6px; ";
+    html += "font-size: 16px; transition: border-color 0.3s ease; }";
+    html += "input:focus { outline: none; border-color: #4CAF50; box-shadow: 0 0 5px rgba(76, 175, 80, 0.3); }";
+    html += ".btn { background-color: #4CAF50; color: white; padding: 12px 20px; ";
+    html += "border: none; border-radius: 6px; cursor: pointer; font-size: 16px; ";
+    html += "text-decoration: none; display: inline-block; margin: 5px; ";
+    html += "transition: all 0.3s ease; touch-action: manipulation; width: 100%; }";
+    html += ".btn:hover, .btn:focus { background-color: #45a049; transform: translateY(-1px); outline: none; }";
+    html += ".btn:active { transform: translateY(0); }";
+    html += ".btn-secondary { background-color: #757575; }";
+    html += ".btn-secondary:hover, .btn-secondary:focus { background-color: #616161; }";
+    html += ".card { background-color: white; border-radius: 10px; padding: 20px; margin: 20px 0; ";
+    html += "box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid #e0e0e0; }";
+    html += ".relay-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }";
+    html += "@media (max-width: 768px) { .relay-config { grid-template-columns: 1fr; } }";
+    html += ".relay-card { border: 1px solid #ddd; padding: 15px; border-radius: 8px; background-color: #fafafa; }";
+    html += ".button-group { display: flex; gap: 10px; margin-top: 20px; }";
+    html += "@media (max-width: 768px) { .button-group { flex-direction: column; gap: 5px; } }";
+    html += "small { color: #666; }";
+    html += "</style></head><body>";
+    html += "<div class='container'>";
+    html += "<h1>Sequence Mode Settings</h1>";
+
+    // Delay Configuration Section
+    html += "<div class='card'>";
+    html += "<h2>Delay Configuration</h2>";
+    html += "<div class='relay-config'>";
+    for (int i = 0; i < 6; i++) {
+      html += "<div class='relay-card'>";
+      html += "<h3>Relay " + String(i) + "</h3>";
+      html += "<form action='/set-delay' method='get'>";
+      html += "<input type='hidden' name='relay' value='" + String(i) + "'>";
+      html += "<div class='form-group'>";
+      html += "<label for='min" + String(i) + "'>Min Delay (ms):</label>";
+      html += "<input type='number' id='min" + String(i) + "' name='min' min='100' max='10000' value='" + String(minDelayRelay[i]) + "' required>";
+      html += "</div>";
+      html += "<div class='form-group'>";
+      html += "<label for='max" + String(i) + "'>Max Delay (ms):</label>";
+      html += "<input type='number' id='max" + String(i) + "' name='max' min='100' max='20000' value='" + String(maxDelayRelay[i]) + "' required>";
+      html += "</div>";
+      html += "<input type='submit' class='btn' value='Save Settings'>";
+      html += "<small>Current range: " + String(minDelayRelay[i]) + " - " + String(maxDelayRelay[i]) + " ms</small>";
+      html += "</form>";
+      html += "</div>";
+    }
+    html += "</div>";
+    html += "</div>";
+
+    html += "<div class='button-group'>";
+    html += "<a href='/' class='btn btn-secondary'>Back to Home</a>";
+    html += "</div>";
+    html += "</div></body></html>";
+    
+    request->send(200, "text/html", html);
+  });
+
+  // Safety Settings Page
+  server.on("/safety-settings", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+    html += "<title>Safety Settings - TARCZOWNIX</title><style>";
+    html += "* { margin: 0; padding: 0; box-sizing: border-box; }";
+    html += "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; ";
+    html += "background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); ";
+    html += "min-height: 100vh; padding: 20px; }";
+    html += ".container { max-width: 800px; margin: 0 auto; background: white; ";
+    html += "border-radius: 15px; padding: 30px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); }";
+    html += "h1 { color: #333; text-align: center; margin-bottom: 30px; font-size: 28px; }";
+    html += "h2 { color: #555; margin-bottom: 15px; font-size: 22px; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }";
+    html += "h3 { color: #666; margin-bottom: 10px; font-size: 18px; }";
+    html += ".btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; ";
+    html += "padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; ";
+    html += "text-decoration: none; display: inline-block; font-size: 16px; ";
+    html += "transition: all 0.3s ease; margin: 5px; }";
+    html += ".btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }";
+    html += ".btn-secondary { background: linear-gradient(135deg, #6c757d 0%, #495057 100%); }";
+    html += ".btn-clear { background: transparent; color: #667eea; border: 2px solid #667eea; }";
+    html += ".btn-clear:hover { background: #667eea; color: white; }";
+    html += ".card { border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin: 15px 0; ";
+    html += "background-color: #f9f9f9; }";
+    html += ".form-group { margin-bottom: 15px; }";
+    html += ".form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }";
+    html += ".form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; ";
+    html += "border-radius: 5px; font-size: 16px; }";
+    html += ".button-group { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }";
+    html += "@media (max-width: 768px) { .button-group { flex-direction: column; } }";
+    html += "p { margin-bottom: 10px; line-height: 1.6; }";
+    html += "</style></head><body>";
+    html += "<div class='container'>";
+    html += "<h1>Safety Settings</h1>";
+
+    // Safety Configuration Section
+    html += "<div class='card'>";
+    html += "<h2>Safety Timeout Configuration</h2>";
+    html += "<h3>Relay Safety Timeout</h3>";
+    html += "<p>Current timeout: <strong>" + String(safetyTimeoutMs) + "ms</strong></p>";
+    html += "<p><small>If a relay doesn't receive its corresponding input signal within this time, all relays will be turned off for safety. This prevents relays from staying active indefinitely if sensors fail or connections are lost.</small></p>";
+    html += "<form action='/set-safety-timeout' method='get'>";
+    html += "<div class='form-group'>";
+    html += "<label for='timeout'>Timeout (ms):</label>";
+    html += "<input type='number' id='timeout' name='timeout' min='500' max='10000' value='" + String(safetyTimeoutMs) + "' required>";
+    html += "</div>";
+    html += "<input type='submit' class='btn' value='Update Safety Timeout'>";
+    html += "</form>";
+    html += "</div>";
+
+    html += "<div class='button-group'>";
+    html += "<a href='/' class='btn btn-secondary'>Back to Home</a>";
+    html += "</div>";
+    html += "</div></body></html>";
     
     request->send(200, "text/html", html);
   });
