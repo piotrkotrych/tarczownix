@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
+#include "esp_task_wdt.h"
 
 #define ANALOG_A1 36
 
@@ -147,6 +148,11 @@ unsigned long inputTimeoutStart[6] = {0}; // Track when each relay was turned on
 bool inputTimeoutActive[6] = {false};     // Track which relays are waiting for input
 String lastErrorMessage = "";             // Store last error for web display
 unsigned long lastErrorTime = 0;         // When the last error occurred
+
+// Microphone monitoring shared variables (volatile for thread safety)
+volatile float currentMicDb = 0.0f;      // Current microphone dB reading
+volatile float peakMicDb = 0.0f;         // Peak microphone dB in current window
+volatile unsigned long lastMicUpdate = 0; // Last time mic was updated
 
 // Enhanced I2C communication with error checking
 bool safeRelayWrite(int pin, int value) {
@@ -303,6 +309,84 @@ void clearLastError() {
   lastErrorTime = 0;
 }
 
+// FreeRTOS task for dedicated microphone monitoring
+// Runs on Core 0 (separate from main loop which runs on Core 1)
+void microphoneTask(void *parameter) {
+  const uint32_t FAST_SAMPLE_INTERVAL_US = 2000;   // ~2 ms between samples
+  const uint32_t PEAK_WINDOW_MS = 20;              // 20 ms short-time peak window
+  
+  uint32_t lastSampleUs = 0;
+  uint32_t windowStartUs = 0;
+  float peakDb = 0.0f;
+  uint32_t lastDebugMs = 0;
+  
+  Serial.println("Microphone task started on Core " + String(xPortGetCoreID()));
+  
+  // Add this task to the watchdog, but with a longer timeout
+  esp_task_wdt_add(NULL);
+  
+  while (true) {
+    // Feed the watchdog to prevent timeout
+    esp_task_wdt_reset();
+    
+    // Only process when in competition mode and waiting for trigger
+    if (currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) {
+      uint32_t nowUs = micros();
+      if (windowStartUs == 0) windowStartUs = nowUs;
+      
+      // Sample microphone at fast interval
+      if ((nowUs - lastSampleUs) >= FAST_SAMPLE_INTERVAL_US) {
+        // Read and convert to approximate dB value
+        float voltageValue = analogRead(ANALOG_A1) / 4095.0f * 3.3f; // ESP32 ADC
+        float dbValue = voltageValue * 50.0f; // Linear approximation
+        
+        // Update shared variables for web monitoring
+        currentMicDb = dbValue;
+        lastMicUpdate = millis();
+        
+        // Track peak within short window
+        if (dbValue > peakDb) peakDb = dbValue;
+        peakMicDb = peakDb; // Share peak value
+        
+        // Immediate trigger on threshold
+        if (dbValue >= competitionSettings.micTriggerThreshold) {
+          competitionState.waitingForMicTrigger = false;
+          competitionState.isRunning = true;
+          competitionState.timerStart = millis();
+          Serial.println("🎯 MIC TRIGGERED on Core " + String(xPortGetCoreID()) + 
+                        "! dB: " + String(dbValue, 1) + 
+                        " >= " + String(competitionSettings.micTriggerThreshold, 1));
+          peakDb = 0.0f;
+        }
+        
+        // End of peak window: debug print and reset
+        uint32_t nowMs = millis();
+        if ((nowUs - windowStartUs) >= (PEAK_WINDOW_MS * 1000UL)) {
+          // Throttle debug output to ~4 Hz
+          if (nowMs - lastDebugMs >= 250) {
+            if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
+              Serial.println("Mic peak " + String(peakDb, 1) + " dBA (thr " + 
+                           String(competitionSettings.micTriggerThreshold, 1) + ")");
+            }
+            lastDebugMs = nowMs;
+          }
+          peakDb = 0.0f;
+          windowStartUs = nowUs;
+        }
+        
+        lastSampleUs = nowUs;
+      }
+      
+      // Small delay to prevent watchdog timeout - still very responsive
+      // Delay 1ms = still checking 1000 times per second!
+      vTaskDelay(1 / portTICK_PERIOD_MS);
+    } else {
+      // When not waiting for mic trigger, sleep to save CPU
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting setup...");
@@ -330,6 +414,10 @@ void setup() {
   loadCompetitionSettings();
 
   pinMode(ANALOG_A1, INPUT);
+
+  // Initialize I2C bus once before initializing PCF8574 devices
+  Wire.begin(4, 15); // SDA=4, SCL=15
+  Serial.println("I2C bus initialized (SDA=4, SCL=15)");
 
   // set inputs to pull-up mode
   inputs.pinMode(0, INPUT); // Set pin 0 as input
@@ -639,6 +727,7 @@ void setup() {
     html += "<a href='/sequence-settings' class='btn btn-clear' style='background-color: #2196f3;'>Sequence Settings</a>";
     html += "<a href='/competition-settings' class='btn btn-clear' style='background-color: #673ab7;'>Competition Settings</a>";
     html += "<a href='/safety-settings' class='btn btn-clear' style='background-color: #ff9800;'>Safety Settings</a>";
+    html += "<a href='/mic-monitor' class='btn btn-clear' style='background-color: #4caf50;'>🎤 Mic Monitor</a>";
     html += "</div>";
     html += "</div>";
 
@@ -841,6 +930,24 @@ void setup() {
     json += "],";
     json += "\"safetyTimeoutMs\":" + String(safetyTimeoutMs) + ",";
     json += "\"micDbThreshold\":" + String(micDbThreshold, 1);
+    json += "}";
+    
+    request->send(200, "application/json", json);
+  });
+
+  // Microphone monitoring endpoint - returns real-time mic data
+  server.on("/mic-status", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Read current microphone value
+    float voltageValue = analogRead(ANALOG_A1) / 4095.0f * 3.3f;
+    float instantDb = voltageValue * 50.0f;
+    
+    String json = "{";
+    json += "\"currentDb\":" + String(instantDb, 1) + ",";
+    json += "\"peakDb\":" + String(peakMicDb, 1) + ",";
+    json += "\"threshold\":" + String(competitionSettings.micTriggerThreshold, 1) + ",";
+    json += "\"isMonitoring\":" + String((currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) ? "true" : "false") + ",";
+    json += "\"lastUpdate\":" + String(lastMicUpdate) + ",";
+    json += "\"rawValue\":" + String(analogRead(ANALOG_A1));
     json += "}";
     
     request->send(200, "application/json", json);
@@ -1300,8 +1407,110 @@ void setup() {
     request->send(200, "text/html", html);
   });
 
+  // Microphone monitor page with real-time visualization
+  server.on("/mic-monitor", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>Microphone Monitor</title>";
+    html += "<style>";
+    html += "body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; background-color: #f5f5f5; }";
+    html += ".card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }";
+    html += "h1 { color: #333; margin-bottom: 10px; }";
+    html += "h2 { color: #666; font-size: 1.2em; margin-top: 0; }";
+    html += ".meter { width: 100%; height: 40px; background: #e0e0e0; border-radius: 5px; overflow: hidden; margin: 15px 0; position: relative; }";
+    html += ".meter-fill { height: 100%; background: linear-gradient(90deg, #4caf50, #ffc107, #f44336); transition: width 0.1s; }";
+    html += ".meter-threshold { position: absolute; top: 0; height: 100%; width: 3px; background: red; z-index: 10; }";
+    html += ".value-display { font-size: 2em; font-weight: bold; color: #333; text-align: center; margin: 20px 0; }";
+    html += ".peak-display { font-size: 1.5em; color: #666; text-align: center; margin: 10px 0; }";
+    html += ".status { padding: 10px; border-radius: 5px; text-align: center; margin: 15px 0; font-weight: bold; }";
+    html += ".monitoring { background: #4caf50; color: white; }";
+    html += ".idle { background: #9e9e9e; color: white; }";
+    html += ".btn { display: inline-block; padding: 12px 24px; margin: 5px; text-decoration: none; border-radius: 5px; ";
+    html += "color: white; background-color: #2196f3; text-align: center; font-size: 16px; border: none; cursor: pointer; }";
+    html += ".btn-secondary { background-color: #9e9e9e; }";
+    html += ".info { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #2196f3; }";
+    html += "</style>";
+    html += "</head><body>";
+    html += "<div class='card'>";
+    html += "<h1>Microphone Monitor</h1>";
+    html += "<h2>Real-time Audio Level</h2>";
+    
+    html += "<div id='status' class='status idle'>Idle</div>";
+    
+    html += "<div class='value-display'>";
+    html += "<span id='current-db'>--</span> dB";
+    html += "</div>";
+    
+    html += "<div class='peak-display'>";
+    html += "Peak: <span id='peak-db'>--</span> dB";
+    html += "</div>";
+    
+    html += "<div class='meter'>";
+    html += "<div id='meter-fill' class='meter-fill' style='width: 0%'></div>";
+    html += "<div id='meter-threshold' class='meter-threshold' style='left: 0%'></div>";
+    html += "</div>";
+    
+    html += "<div class='info'>";
+    html += "<strong>Threshold:</strong> <span id='threshold'>--</span> dB<br>";
+    html += "<strong>Raw ADC:</strong> <span id='raw-value'>--</span> / 4095<br>";
+    html += "<strong>Monitoring:</strong> <span id='is-monitoring'>No</span>";
+    html += "</div>";
+    
+    html += "<div class='button-group' style='text-align: center;'>";
+    html += "<a href='/' class='btn btn-secondary'>Back to Home</a>";
+    html += "</div>";
+    html += "</div>";
+    
+    html += "<script>";
+    html += "function updateMic() {";
+    html += "  fetch('/mic-status')";
+    html += "    .then(r => r.json())";
+    html += "    .then(data => {";
+    html += "      document.getElementById('current-db').textContent = data.currentDb.toFixed(1);";
+    html += "      document.getElementById('peak-db').textContent = data.peakDb.toFixed(1);";
+    html += "      document.getElementById('threshold').textContent = data.threshold.toFixed(1);";
+    html += "      document.getElementById('raw-value').textContent = data.rawValue;";
+    html += "      document.getElementById('is-monitoring').textContent = data.isMonitoring ? 'YES (Competition Mode)' : 'No';";
+    html += "      ";
+    html += "      const status = document.getElementById('status');";
+    html += "      if (data.isMonitoring) {";
+    html += "        status.textContent = 'MONITORING - Waiting for trigger';";
+    html += "        status.className = 'status monitoring';";
+    html += "      } else {";
+    html += "        status.textContent = 'Idle';";
+    html += "        status.className = 'status idle';";
+    html += "      }";
+    html += "      ";
+    html += "      const percent = Math.min(100, (data.currentDb / 100) * 100);";
+    html += "      document.getElementById('meter-fill').style.width = percent + '%';";
+    html += "      ";
+    html += "      const thresholdPercent = (data.threshold / 100) * 100;";
+    html += "      document.getElementById('meter-threshold').style.left = thresholdPercent + '%';";
+    html += "    });";
+    html += "}";
+    html += "setInterval(updateMic, 100);"; // Update every 100ms
+    html += "updateMic();"; // Initial update
+    html += "</script>";
+    html += "</body></html>";
+    
+    request->send(200, "text/html", html);
+  });
+
   server.begin(); // Start the server
 
+  // Create FreeRTOS task for dedicated microphone monitoring on Core 0
+  // Main loop runs on Core 1, so this provides true parallel processing
+  xTaskCreatePinnedToCore(
+    microphoneTask,           // Task function
+    "MicrophoneMonitor",      // Name for debugging
+    4096,                     // Stack size (bytes)
+    NULL,                     // Parameters
+    2,                        // Priority (2 = high priority, above normal tasks)
+    NULL,                     // Task handle (we don't need to store it)
+    0                         // Core 0 (main loop runs on Core 1)
+  );
+  
+  Serial.println("Microphone monitoring task created on Core 0");
   
 }
 
@@ -1321,58 +1530,8 @@ void loop() {
     return;
   }
   
-  // Fast microphone sampling for immediate trigger (competition mode)
-  // Use fast peak-detection window and immediate trigger to reduce latency
-  if (currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) {
-    // Tunables
-    const uint32_t FAST_SAMPLE_INTERVAL_US = 2000;   // ~2 ms between samples
-    const uint32_t PEAK_WINDOW_MS = 20;              // 20 ms short-time peak window
-
-    static uint32_t lastSampleUs = 0;
-    static uint32_t windowStartUs = 0;
-    static float peakDb = 0.0f;
-    static uint32_t lastDebugMs = 0;
-
-    uint32_t nowUs = micros();
-    if (windowStartUs == 0) windowStartUs = nowUs;
-
-    // sample as fast as configured
-    if ((nowUs - lastSampleUs) >= FAST_SAMPLE_INTERVAL_US) {
-      // Read and convert to approximate dB value (module-specific)
-      float voltageValue = analogRead(ANALOG_A1) / 4095.0f * 3.3f; // ESP32 ADC
-      float dbValue = voltageValue * 50.0f; // Linear approximation used previously
-
-      // Track peak within a short window to catch impulses (gunshot)
-      if (dbValue > peakDb) peakDb = dbValue;
-
-      // Immediate trigger on any sample meeting threshold (lowest latency)
-      if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
-        if (dbValue >= competitionSettings.micTriggerThreshold) {
-          competitionState.waitingForMicTrigger = false;
-          competitionState.isRunning = true;
-          competitionState.timerStart = millis();
-          Serial.println("Competition mic trigger! dB: " + String(dbValue, 1) +
-                         " >= " + String(competitionSettings.micTriggerThreshold, 1));
-        }
-      }
-
-      // End of peak window: optional debug print and reset
-      uint32_t nowMs = millis();
-      if ((nowUs - windowStartUs) >= (PEAK_WINDOW_MS * 1000UL)) {
-        // Throttle debug output to ~4 Hz while waiting (lightweight)
-        if (nowMs - lastDebugMs >= 250) {
-          if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
-            Serial.println("Mic peak " + String(peakDb, 1) + " dBA (thr " + String(competitionSettings.micTriggerThreshold, 1) + ")");
-          }
-          lastDebugMs = nowMs;
-        }
-        peakDb = 0.0f;
-        windowStartUs = nowUs;
-      }
-
-      lastSampleUs = nowUs;
-    }
-  }
+  // NOTE: Microphone monitoring is now handled by dedicated FreeRTOS task on Core 0
+  // This eliminates interference from main loop and provides instant trigger response
   
   // Handle different operating modes
   if (currentMode == MODE_SEQUENCE) {
@@ -1465,10 +1624,8 @@ void loop() {
     executeManualMode();
   }
   
-  // Avoid artificial delay while we're waiting for a mic trigger to ensure lowest latency
-  if (!(currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger)) {
-    delay(10);
-  }
+  // Normal delay - microphone monitoring is handled by dedicated FreeRTOS task
+  delay(10);
 }
 
 // Function to get a random delay in milliseconds for a specific relay
@@ -1513,10 +1670,16 @@ void saveSafetyTimeout() {
 }
 
 void loadSafetyTimeout() {
-  preferences.begin("safetyConfig", true); // Open preferences in read-only mode
-  safetyTimeoutMs = preferences.getInt("timeoutMs", 1000); // Default to 1000ms if not found
-  preferences.end(); // Close preferences
-  Serial.println("Safety timeout loaded from flash: " + String(safetyTimeoutMs) + "ms");
+  if (preferences.begin("safetyConfig", true)) { // Open preferences in read-only mode
+    safetyTimeoutMs = preferences.getInt("timeoutMs", 1000); // Default to 1000ms if not found
+    preferences.end(); // Close preferences
+    Serial.println("Safety timeout loaded from flash: " + String(safetyTimeoutMs) + "ms");
+  } else {
+    // Namespace doesn't exist yet (first boot), use default and create it
+    safetyTimeoutMs = 1000;
+    Serial.println("Safety timeout initialized to default: " + String(safetyTimeoutMs) + "ms (first boot)");
+    saveSafetyTimeout(); // Create the namespace with default value
+  }
 }
 
 void saveMicDbThreshold() {
@@ -1527,10 +1690,16 @@ void saveMicDbThreshold() {
 }
 
 void loadMicDbThreshold() {
-  preferences.begin("micConfig", true); // Open preferences in read-only mode
-  micDbThreshold = preferences.getFloat("dbThreshold", 50.0); // Default to 50.0 dBA if not found
-  preferences.end(); // Close preferences
-  Serial.println("Microphone dB threshold loaded from flash: " + String(micDbThreshold, 1) + " dBA");
+  if (preferences.begin("micConfig", true)) { // Open preferences in read-only mode
+    micDbThreshold = preferences.getFloat("dbThreshold", 50.0); // Default to 50.0 dBA if not found
+    preferences.end(); // Close preferences
+    Serial.println("Microphone dB threshold loaded from flash: " + String(micDbThreshold, 1) + " dBA");
+  } else {
+    // Namespace doesn't exist yet (first boot), use default and create it
+    micDbThreshold = 50.0;
+    Serial.println("Microphone dB threshold initialized to default: " + String(micDbThreshold, 1) + " dBA (first boot)");
+    saveMicDbThreshold(); // Create the namespace with default value
+  }
 }
 
 // ========== COMPETITION MODE FUNCTIONS ==========
