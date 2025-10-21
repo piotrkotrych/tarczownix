@@ -16,6 +16,8 @@ struct MotorState {
   bool waitingForInput = false;
   bool isActive = false;
   int currentRandomDelay = 0; // Store the current random delay for this relay
+  bool waitingForInitialDelay = false; // Waiting for initial random delay before first activation
+  int initialRandomDelay = 0; // Initial random delay before starting sequence
 };
 
 // Array of motor states for cleaner code
@@ -730,16 +732,27 @@ void setup() {
 
   // Check if relays 0, 2, 4 are off before starting
   if (relays.digitalRead(0) == HIGH && relays.digitalRead(2) == HIGH && relays.digitalRead(4) == HIGH) {
-    relays.digitalWrite(0, LOW); // Turn on relay 0
-    relays.digitalWrite(2, LOW); // Turn on relay 2  
-    relays.digitalWrite(4, LOW); // Turn on relay 4
+    // Set up random initial delays for each pair (relays 0, 2, 4)
+    // These delays will prevent all targets from starting at the same time
+    motorStates[0].waitingForInitialDelay = true;
+    motorStates[0].initialRandomDelay = getRandomDelay(0);
+    motorStates[0].delayStartTime = millis();
     
-    // Start timeout monitoring for the relays that are now on
-    startInputTimeout(0);
-    startInputTimeout(2);
-    startInputTimeout(4);
+    motorStates[2].waitingForInitialDelay = true;
+    motorStates[2].initialRandomDelay = getRandomDelay(2);
+    motorStates[2].delayStartTime = millis();
     
-    message = "Relay 0, 2, and 4 are now ON";
+    motorStates[4].waitingForInitialDelay = true;
+    motorStates[4].initialRandomDelay = getRandomDelay(4);
+    motorStates[4].delayStartTime = millis();
+    
+    Serial.println("Starting sequence with initial random delays:");
+    Serial.println("  Relay 0: " + String(motorStates[0].initialRandomDelay) + "ms");
+    Serial.println("  Relay 2: " + String(motorStates[2].initialRandomDelay) + "ms");
+    Serial.println("  Relay 4: " + String(motorStates[4].initialRandomDelay) + "ms");
+    
+    systemState = SYSTEM_RUNNING;
+    message = "Sequence starting with random delays for each pair";
   } else {
     message = "Error: One or more relays are already ON";
     hasError = true;
@@ -770,6 +783,8 @@ void setup() {
       motorStates[i].waitingForInput = false;
       motorStates[i].isActive = false; 
       motorStates[i].delayStartTime = 0;
+      motorStates[i].waitingForInitialDelay = false;
+      motorStates[i].initialRandomDelay = 0;
     }
     systemState = SYSTEM_STOPPED;
 
@@ -1366,6 +1381,20 @@ void loop() {
     for (int relayPair = 0; relayPair < 3; relayPair++) {
       int relay1 = relayPair * 2;     // 0, 2, 4
       int relay2 = relayPair * 2 + 1; // 1, 3, 5
+      
+      // Check if relay1 is waiting for initial random delay before first activation
+      if (motorStates[relay1].waitingForInitialDelay) {
+        if (millis() - motorStates[relay1].delayStartTime >= motorStates[relay1].initialRandomDelay) {
+          // Initial delay completed, activate the relay
+          Serial.println("Initial delay of " + String(motorStates[relay1].initialRandomDelay) + "ms completed for relay " + String(relay1) + ", activating");
+          safeRelayWrite(relay1, LOW);
+          startInputTimeout(relay1);
+          motorStates[relay1].waitingForInitialDelay = false;
+          delay(10);
+        }
+        // Skip normal processing while waiting for initial delay
+        continue;
+      }
       
       // Check relay1 (even numbered relays: 0, 2, 4)
       if(safeInputRead(relay1) == LOW && 
