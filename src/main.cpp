@@ -695,43 +695,13 @@ void setup() {
         break;
     }
     html += "</p>";
-    if (currentMode == MODE_ZAWODY) {
-      if (competitionState.waitingForMicTrigger) {
-        html += "<p><strong>Status:</strong> <span style='color: #ff9800;'>Competition ready - waiting for mic trigger (" + String(competitionSettings.micTriggerThreshold, 1) + " dBA)</span></p>";
-      } else if (competitionState.isRunning) {
-        html += "<p><strong>Status:</strong> <span style='color: #4CAF50;'>Competition running</span></p>";
-        html += "<p><strong>Target Progress:</strong> T1:" + String(competitionState.target1Count) + "/" + String(competitionSettings.repetitions) + 
-                " T2:" + String(competitionState.target2Count) + "/" + String(competitionSettings.repetitions) + 
-                " T3:" + String(competitionState.target3Count) + "/" + String(competitionSettings.repetitions) + "</p>";
-      } else {
-        html += "<p><strong>Status:</strong> <span style='color: #757575;'>Competition mode inactive</span></p>";
-      }
-    } else if (currentMode == MODE_MANUAL) {
-      html += "<p><strong>Status:</strong> <span style='color: #ff5722;'>Manual control active</span></p>";
-    }
     html += "<p><strong>Last Error:</strong> " + getLastError() + "</p>";
     if (lastErrorTime > 0) {
       html += "<a href='/clear-error' class='btn btn-clear'>Clear Error</a>";
     }
     html += "</div>";
 
-    // Mode Selection
-    html += "<div class='card'>";
-    html += "<h2>Operating Mode</h2>";
-    html += "<div class='button-group'>";
-    html += "<a href='/set-mode?mode=sequence' class='btn " + String(currentMode == MODE_SEQUENCE ? "btn-stop" : "") + "'>Sequence Mode</a>";
-    html += "<a href='/start-competition' class='btn " + String(currentMode == MODE_ZAWODY ? "btn-stop" : "") + "' style='background-color: #9c27b0;'>Competition Mode</a>";
-    html += "<a href='/start-manual' class='btn " + String(currentMode == MODE_MANUAL ? "btn-stop" : "") + "' style='background-color: #ff5722;'>Manual Mode</a>";
-    html += "</div>";
-    html += "<div class='button-group' style='margin-top: 15px;'>";
-    html += "<a href='/sequence-settings' class='btn btn-clear' style='background-color: #2196f3;'>Sequence Settings</a>";
-    html += "<a href='/competition-settings' class='btn btn-clear' style='background-color: #673ab7;'>Competition Settings</a>";
-    html += "<a href='/safety-settings' class='btn btn-clear' style='background-color: #ff9800;'>Safety Settings</a>";
-    html += "<a href='/mic-monitor' class='btn btn-clear' style='background-color: #4caf50;'>🎤 Mic Monitor</a>";
-    html += "</div>";
-    html += "</div>";
-
-    // Relay control section with better visualization
+    // Mode Controls - Start/Stop buttons for current mode
     html += "<div class='card'>";
     if (currentMode == MODE_SEQUENCE) {
       html += "<h2>Sequence Control</h2>";
@@ -742,9 +712,13 @@ void setup() {
     } else if (currentMode == MODE_ZAWODY) {
       html += "<h2>Competition Control</h2>";
       if (competitionState.isRunning) {
+        html += "<p><strong>Status:</strong> <span style='color: #4CAF50;'>Competition running</span></p>";
+        html += "<p><strong>Target Progress:</strong> T1:" + String(competitionState.target1Count) + "/" + String(competitionSettings.repetitions) + 
+                " T2:" + String(competitionState.target2Count) + "/" + String(competitionSettings.repetitions) + 
+                " T3:" + String(competitionState.target3Count) + "/" + String(competitionSettings.repetitions) + "</p>";
         html += "<a href='/stop-competition' class='btn btn-stop'>Stop Competition</a>";
       } else if (competitionState.waitingForMicTrigger) {
-        html += "<p><span style='color: #ff9800;'>Competition initialized - waiting for mic trigger</span></p>";
+        html += "<p><span style='color: #ff9800;'>Competition initialized - waiting for mic trigger (" + String(competitionSettings.micTriggerThreshold, 1) + " dBA)</span></p>";
         html += "<a href='/stop-competition' class='btn btn-stop'>Cancel Competition</a>";
       } else {
         html += "<a href='/start-competition' class='btn' style='background-color: #9c27b0;'>Start Competition</a>";
@@ -793,7 +767,27 @@ void setup() {
       html += "setInterval(updateTargetStatus, 2000);";
       html += "</script>";
     }
-    
+    html += "</div>";
+
+    // Mode Selection
+    html += "<div class='card'>";
+    html += "<h2>Choose Operating Mode</h2>";
+    html += "<div class='button-group'>";
+    html += "<a href='/set-mode?mode=sequence' class='btn " + String(currentMode == MODE_SEQUENCE ? "btn-stop" : "") + "'>Sequence Mode</a>";
+    html += "<a href='/start-competition' class='btn " + String(currentMode == MODE_ZAWODY ? "btn-stop" : "") + "' style='background-color: #9c27b0;'>Competition Mode</a>";
+    html += "<a href='/start-manual' class='btn " + String(currentMode == MODE_MANUAL ? "btn-stop" : "") + "' style='background-color: #ff5722;'>Manual Mode</a>";
+    html += "</div>";
+    html += "</div>";
+
+    // Settings and Tools Card
+    html += "<div class='card'>";
+    html += "<h2>Settings & Tools</h2>";
+    html += "<div class='button-group'>";
+    html += "<a href='/sequence-settings' class='btn btn-clear' style='background-color: #2196f3;'>⚙️ Sequence Settings</a>";
+    html += "<a href='/competition-settings' class='btn btn-clear' style='background-color: #673ab7;'>🏆 Competition Settings</a>";
+    html += "<a href='/safety-settings' class='btn btn-clear' style='background-color: #ff9800;'>🛡️ Safety Settings</a>";
+    html += "<a href='/mic-monitor' class='btn btn-clear' style='background-color: #4caf50;'>🎤 Mic Monitor</a>";
+    html += "</div>";
     html += "</div>";
 
     // Add JavaScript to load configuration data
