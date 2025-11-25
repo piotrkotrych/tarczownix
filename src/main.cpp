@@ -154,6 +154,11 @@ volatile float currentMicDb = 0.0f;      // Current microphone dB reading
 volatile float peakMicDb = 0.0f;         // Peak microphone dB in current window
 volatile unsigned long lastMicUpdate = 0; // Last time mic was updated
 
+// Cross-core trigger synchronization (atomic flag pattern)
+// Core 0 sets these when mic threshold is crossed, Core 1 handles state transition
+volatile bool micTriggerDetected = false;    // Single atomic flag for trigger event
+volatile float micTriggerDbValue = 0.0f;     // dB value that caused the trigger
+
 // Enhanced I2C communication with error checking
 bool safeRelayWrite(int pin, int value) {
   bool success = relays.digitalWrite(pin, value);
@@ -311,18 +316,22 @@ void clearLastError() {
 
 // FreeRTOS task for dedicated microphone monitoring
 // Runs on Core 0 (separate from main loop which runs on Core 1)
+// Optimized for gunshot detection: burst sampling at ~50kHz for transient capture
 void microphoneTask(void *parameter) {
-  const uint32_t FAST_SAMPLE_INTERVAL_US = 2000;   // ~2 ms between samples
-  const uint32_t PEAK_WINDOW_MS = 20;              // 20 ms short-time peak window
+  // Gunshot detection requires very fast sampling to catch the <5ms transient
+  // ESP32 ADC can do ~100kHz in theory, we'll do burst sampling at ~50kHz
+  const int BURST_SAMPLES = 64;           // Samples per burst (captures ~1.3ms at 50kHz)
+  const uint32_t BURST_INTERVAL_MS = 2;   // Time between bursts when actively monitoring
+  const uint32_t DEBUG_INTERVAL_MS = 250; // Debug output throttle
   
-  uint32_t lastSampleUs = 0;
-  uint32_t windowStartUs = 0;
+  uint16_t sampleBuffer[BURST_SAMPLES];   // Raw ADC values
   float peakDb = 0.0f;
   uint32_t lastDebugMs = 0;
   
   Serial.println("Microphone task started on Core " + String(xPortGetCoreID()));
+  Serial.println("Gunshot detection mode: burst sampling " + String(BURST_SAMPLES) + " samples per burst");
   
-  // Add this task to the watchdog, but with a longer timeout
+  // Add this task to the watchdog
   esp_task_wdt_add(NULL);
   
   while (true) {
@@ -330,56 +339,82 @@ void microphoneTask(void *parameter) {
     esp_task_wdt_reset();
     
     // Only process when in competition mode and waiting for trigger
-    if (currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) {
-      uint32_t nowUs = micros();
-      if (windowStartUs == 0) windowStartUs = nowUs;
+    if (currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger && !micTriggerDetected) {
       
-      // Sample microphone at fast interval
-      if ((nowUs - lastSampleUs) >= FAST_SAMPLE_INTERVAL_US) {
-        // Read and convert to approximate dB value
-        float voltageValue = analogRead(ANALOG_A1) / 4095.0f * 3.3f; // ESP32 ADC
-        float dbValue = voltageValue * 50.0f; // Linear approximation
-        
-        // Update shared variables for web monitoring
-        currentMicDb = dbValue;
-        lastMicUpdate = millis();
-        
-        // Track peak within short window
-        if (dbValue > peakDb) peakDb = dbValue;
-        peakMicDb = peakDb; // Share peak value
-        
-        // Immediate trigger on threshold
-        if (dbValue >= competitionSettings.micTriggerThreshold) {
-          competitionState.waitingForMicTrigger = false;
-          competitionState.isRunning = true;
-          competitionState.timerStart = millis();
-          Serial.println("🎯 MIC TRIGGERED on Core " + String(xPortGetCoreID()) + 
-                        "! dB: " + String(dbValue, 1) + 
-                        " >= " + String(competitionSettings.micTriggerThreshold, 1));
-          peakDb = 0.0f;
-        }
-        
-        // End of peak window: debug print and reset
-        uint32_t nowMs = millis();
-        if ((nowUs - windowStartUs) >= (PEAK_WINDOW_MS * 1000UL)) {
-          // Throttle debug output to ~4 Hz
-          if (nowMs - lastDebugMs >= 250) {
-            if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
-              Serial.println("Mic peak " + String(peakDb, 1) + " dBA (thr " + 
-                           String(competitionSettings.micTriggerThreshold, 1) + ")");
-            }
-            lastDebugMs = nowMs;
-          }
-          peakDb = 0.0f;
-          windowStartUs = nowUs;
-        }
-        
-        lastSampleUs = nowUs;
+      // === BURST SAMPLING: Capture rapid samples to catch gunshot transient ===
+      // Disable interrupts briefly for consistent timing (critical for transient detection)
+      portDISABLE_INTERRUPTS();
+      
+      uint16_t maxRaw = 0;
+      uint32_t sumRaw = 0;
+      
+      // Burst read at maximum speed (~20-50kHz depending on ESP32 ADC speed)
+      for (int i = 0; i < BURST_SAMPLES; i++) {
+        sampleBuffer[i] = analogRead(ANALOG_A1);
+        if (sampleBuffer[i] > maxRaw) maxRaw = sampleBuffer[i];
+        sumRaw += sampleBuffer[i];
       }
       
-      // Small delay to prevent watchdog timeout - still very responsive
-      // Delay 1ms = still checking 1000 times per second!
-      vTaskDelay(1 / portTICK_PERIOD_MS);
+      portENABLE_INTERRUPTS();
+      // === END BURST SAMPLING ===
+      
+      // Calculate average (baseline) and peak
+      float avgRaw = (float)sumRaw / BURST_SAMPLES;
+      float peakVoltage = maxRaw / 4095.0f * 3.3f;
+      float avgVoltage = avgRaw / 4095.0f * 3.3f;
+      
+      // Calculate the DIFFERENCE between peak and average (detects transients)
+      // Gunshots have huge peak-to-average ratio, ambient noise doesn't
+      float transientVoltage = peakVoltage - avgVoltage;
+      
+      // Convert to approximate dB (using peak voltage for display)
+      float dbValue = peakVoltage * 50.0f;
+      float transientDb = transientVoltage * 50.0f;
+      
+      // Update shared variables for web monitoring (use peak)
+      currentMicDb = dbValue;
+      lastMicUpdate = millis();
+      
+      // Track overall peak for debug display
+      if (dbValue > peakDb) peakDb = dbValue;
+      peakMicDb = peakDb;
+      
+      // === DUAL DETECTION CRITERIA ===
+      // Trigger on EITHER:
+      // 1. Absolute peak exceeds threshold (loud sounds like claps)
+      // 2. Transient spike exceeds 60% of threshold (sharp sounds like gunshots)
+      float transientThreshold = competitionSettings.micTriggerThreshold * 0.6f;
+      
+      bool absoluteTrigger = (dbValue >= competitionSettings.micTriggerThreshold);
+      bool transientTrigger = (transientDb >= transientThreshold);
+      
+      if (absoluteTrigger || transientTrigger) {
+        micTriggerDbValue = dbValue;
+        micTriggerDetected = true;
+        
+        String triggerType = absoluteTrigger ? "PEAK" : "TRANSIENT";
+        Serial.println("🎯 MIC DETECTED [" + triggerType + "] on Core " + String(xPortGetCoreID()) + 
+                      "! Peak: " + String(dbValue, 1) + " dB, Transient: " + String(transientDb, 1) + 
+                      " dB (thr: " + String(competitionSettings.micTriggerThreshold, 1) + "/" + 
+                      String(transientThreshold, 1) + ")");
+        peakDb = 0.0f;
+      }
+      
+      // Debug output (throttled)
+      uint32_t nowMs = millis();
+      if (nowMs - lastDebugMs >= DEBUG_INTERVAL_MS) {
+        if (competitionState.waitingForMicTrigger && currentMode == MODE_ZAWODY) {
+          Serial.println("Mic: peak=" + String(dbValue, 1) + " trans=" + String(transientDb, 1) + 
+                        " dB (thr " + String(competitionSettings.micTriggerThreshold, 1) + 
+                        "/" + String(transientThreshold, 1) + ")");
+        }
+        lastDebugMs = nowMs;
+        peakDb = 0.0f;  // Reset peak for next debug window
+      }
+      
+      // Short delay between bursts - still very responsive at 500 bursts/sec
+      vTaskDelay(BURST_INTERVAL_MS / portTICK_PERIOD_MS);
+      
     } else {
       // When not waiting for mic trigger, sleep to save CPU
       vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -1524,6 +1559,18 @@ void loop() {
     return;
   }
   
+  // Handle mic trigger from Core 0 (atomic flag pattern)
+  // Core 0 detects the threshold crossing, Core 1 handles state transition
+  // This ensures all state machine updates happen on the same core
+  if (micTriggerDetected && currentMode == MODE_ZAWODY && competitionState.waitingForMicTrigger) {
+    micTriggerDetected = false;  // Clear flag first to prevent re-entry
+    competitionState.waitingForMicTrigger = false;
+    competitionState.isRunning = true;
+    competitionState.timerStart = millis();
+    Serial.println("🎯 MIC TRIGGERED! Competition started on Core " + String(xPortGetCoreID()) + 
+                  " (detected at " + String(micTriggerDbValue, 1) + " dB)");
+  }
+  
   // NOTE: Microphone monitoring is now handled by dedicated FreeRTOS task on Core 0
   // This eliminates interference from main loop and provides instant trigger response
   
@@ -1798,6 +1845,10 @@ void startCompetitionMode() {
   competitionState.target2Active = false;
   competitionState.target3Active = false;
   
+  // Reset mic trigger flag to ensure clean state for Core 0 detection
+  micTriggerDetected = false;
+  micTriggerDbValue = 0.0f;
+  
   // Ensure system is in stopped state to allow mic monitoring
   systemState = SYSTEM_STOPPED;
   
@@ -2014,6 +2065,10 @@ void stopCompetitionMode() {
   competitionState.isRunning = false;
   competitionState.waitingForMicTrigger = false;
   competitionState.initialized = false;
+  
+  // Clear mic trigger flag to prevent stale triggers
+  micTriggerDetected = false;
+  micTriggerDbValue = 0.0f;
   
   Serial.println("Competition mode stopped");
 }

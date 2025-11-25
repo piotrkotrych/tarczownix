@@ -1,3 +1,6 @@
 .pio
-.vscode/
+.vscode
 .vscode/extensions.json
+.github
+.github/copilot-instructions.md
+.specify
