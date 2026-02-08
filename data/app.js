@@ -15,9 +15,13 @@ function connectSocket() {
 
     socket.onmessage = function(event) {
         try {
-            const data = JSON.parse(event.data);
-            for (const [id, state] of Object.entries(data)) {
-                updateStatus(id, state);
+            const payload = JSON.parse(event.data);
+            if (payload && payload.type) {
+                handleTypedMessage(payload);
+            } else if (payload) {
+                for (const [id, state] of Object.entries(payload)) {
+                    updateStatus(id, state);
+                }
             }
         } catch (err) {
             console.log("[message] Invalid JSON:", event.data);
@@ -88,11 +92,36 @@ for (let i = 1; i <= 3; i++) {
     createTargetCard(i);
 }
 
+function handleTypedMessage(payload) {
+    if (payload.type === 'status' && payload.data) {
+        for (const [id, state] of Object.entries(payload.data)) {
+            updateStatus(id, state);
+        }
+        return;
+    }
+
+    if (payload.type === 'diagnostics') {
+        renderJson('diag-output', payload.data);
+        return;
+    }
+
+    if (payload.type === 'logs') {
+        renderJson('log-output', payload.data);
+        return;
+    }
+}
+
+function renderJson(elementId, data) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    el.textContent = JSON.stringify(data, null, 2);
+}
+
 async function refreshDiagnostics() {
     try {
         const res = await fetch('/api/diagnostics');
         const data = await res.json();
-        document.getElementById('diag-output').textContent = JSON.stringify(data, null, 2);
+        renderJson('diag-output', data);
     } catch (err) {
         document.getElementById('diag-output').textContent = 'Diagnostics error';
     }
@@ -102,7 +131,7 @@ async function refreshLogs() {
     try {
         const res = await fetch('/api/logs');
         const data = await res.json();
-        document.getElementById('log-output').textContent = JSON.stringify(data, null, 2);
+        renderJson('log-output', data);
     } catch (err) {
         document.getElementById('log-output').textContent = 'Logs error';
     }

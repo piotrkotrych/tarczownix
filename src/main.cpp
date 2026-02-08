@@ -6,6 +6,7 @@
 #include "Hardware/Microphone.h"
 #include "Logic/GameManager.h"
 #include "Logic/SettingsManager.h"
+#include "Logic/DebugLogger.h"
 #include "Network/NetworkManager.h"
 
  // --- Hardware Instances ---
@@ -101,6 +102,9 @@ void loop() {
     static TargetState last2 = (TargetState)-1;
     static TargetState last3 = (TargetState)-1;
     static unsigned long lastStatusSent = 0;
+    static unsigned long lastDiagSent = 0;
+    static unsigned long lastLogsSent = 0;
+    static size_t lastLogCount = 0;
 
     const TargetState s1 = target1.getState();
     const TargetState s2 = target2.getState();
@@ -114,12 +118,24 @@ void loop() {
         doc["3"] = toStateString(s3);
         String json;
         serializeJson(doc, json);
-        networkManager.broadcastStatus(json);
+        networkManager.broadcastEvent("status", json);
 
         last1 = s1;
         last2 = s2;
         last3 = s3;
         lastStatusSent = millis();
+    }
+
+    if (millis() - lastDiagSent > 500) {
+        networkManager.broadcastEvent("diagnostics", networkManager.getDiagnosticsJson());
+        lastDiagSent = millis();
+    }
+
+    const size_t logCount = DebugLogger::instance().getCount();
+    if (logCount != lastLogCount || (millis() - lastLogsSent > 2000)) {
+        networkManager.broadcastEvent("logs", networkManager.getLogsJson());
+        lastLogCount = logCount;
+        lastLogsSent = millis();
     }
 
     delay(5); // Small yield

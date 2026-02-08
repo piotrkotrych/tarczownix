@@ -54,3 +54,10 @@ void DebugLogger::clear() {
     _count = 0;
     portEXIT_CRITICAL(&_mux);
 }
+
+size_t DebugLogger::getCount() {
+    portENTER_CRITICAL(&_mux);
+    const size_t count = _count;
+    portEXIT_CRITICAL(&_mux);
+    return count;
+}

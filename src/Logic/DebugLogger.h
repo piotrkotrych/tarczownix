@@ -7,6 +7,7 @@ public:
 
     void log(const char* fmt, ...);
     String getJson();
+    size_t getCount();
     void clear();
 
 private:

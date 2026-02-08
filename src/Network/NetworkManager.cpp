@@ -100,6 +100,58 @@ void NetworkManager::broadcastStatus(String json) {
     _ws.textAll(json);
 }
 
+void NetworkManager::broadcastEvent(const char* type, const String& payload) {
+    String out = String("{\"type\":\"") + type + "\",\"data\":" + payload + "}";
+    _ws.textAll(out);
+}
+
+String NetworkManager::getDiagnosticsJson() {
+    JsonDocument doc;
+    doc["uptimeMs"] = millis();
+
+    if (_gameManager) {
+        doc["mode"] = _gameManager->getModeName();
+        if (_gameManager->getCompetitionMode()) {
+            doc["competitionState"] = toCompetitionStateString(_gameManager->getCompetitionMode()->getState());
+        }
+    }
+
+    if (_relayManager) {
+        doc["relayShadow"] = _relayManager->getShadowRegister();
+    }
+
+    if (_inputManager) {
+        doc["inputRaw"] = _inputManager->getRaw();
+        doc["inputStable"] = _inputManager->getStable();
+    }
+
+    if (_t1 && _t2 && _t3) {
+        JsonObject targets = doc["targets"].to<JsonObject>();
+        JsonObject t1 = targets["1"].to<JsonObject>();
+        t1["state"] = toStateString(_t1->getState());
+        t1["pendingMove"] = _t1->isPendingMove();
+        t1["pendingShow"] = _t1->isPendingShow();
+
+        JsonObject t2 = targets["2"].to<JsonObject>();
+        t2["state"] = toStateString(_t2->getState());
+        t2["pendingMove"] = _t2->isPendingMove();
+        t2["pendingShow"] = _t2->isPendingShow();
+
+        JsonObject t3 = targets["3"].to<JsonObject>();
+        t3["state"] = toStateString(_t3->getState());
+        t3["pendingMove"] = _t3->isPendingMove();
+        t3["pendingShow"] = _t3->isPendingShow();
+    }
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+String NetworkManager::getLogsJson() {
+    return DebugLogger::instance().getJson();
+}
+
 void NetworkManager::_setupRoutes() {
     _server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
@@ -158,46 +210,7 @@ void NetworkManager::_setupRoutes() {
     });
 
     _server.on("/api/diagnostics", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        JsonDocument doc;
-        doc["uptimeMs"] = millis();
-
-        if (_gameManager) {
-            doc["mode"] = _gameManager->getModeName();
-            if (_gameManager->getCompetitionMode()) {
-                doc["competitionState"] = toCompetitionStateString(_gameManager->getCompetitionMode()->getState());
-            }
-        }
-
-        if (_relayManager) {
-            doc["relayShadow"] = _relayManager->getShadowRegister();
-        }
-
-        if (_inputManager) {
-            doc["inputRaw"] = _inputManager->getRaw();
-            doc["inputStable"] = _inputManager->getStable();
-        }
-
-        if (_t1 && _t2 && _t3) {
-            JsonObject targets = doc["targets"].to<JsonObject>();
-            JsonObject t1 = targets["1"].to<JsonObject>();
-            t1["state"] = toStateString(_t1->getState());
-            t1["pendingMove"] = _t1->isPendingMove();
-            t1["pendingShow"] = _t1->isPendingShow();
-
-            JsonObject t2 = targets["2"].to<JsonObject>();
-            t2["state"] = toStateString(_t2->getState());
-            t2["pendingMove"] = _t2->isPendingMove();
-            t2["pendingShow"] = _t2->isPendingShow();
-
-            JsonObject t3 = targets["3"].to<JsonObject>();
-            t3["state"] = toStateString(_t3->getState());
-            t3["pendingMove"] = _t3->isPendingMove();
-            t3["pendingShow"] = _t3->isPendingShow();
-        }
-
-        String out;
-        serializeJson(doc, out);
-        request->send(200, "application/json", out);
+        request->send(200, "application/json", getDiagnosticsJson());
     });
 
     _server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request) {

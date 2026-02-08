@@ -22,6 +22,9 @@ public:
     void update();
     void setCommandCallback(CommandCallback callback);
     void broadcastStatus(String json);
+    void broadcastEvent(const char* type, const String& payload);
+    String getDiagnosticsJson();
+    String getLogsJson();
 
     void setSettingsManager(SettingsManager* settingsManager);
     void setMicrophone(Microphone* microphone);
