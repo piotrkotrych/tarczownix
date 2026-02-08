@@ -117,30 +117,10 @@ function renderJson(elementId, data) {
     el.textContent = JSON.stringify(data, null, 2);
 }
 
-async function refreshDiagnostics() {
-    try {
-        const res = await fetch('/api/diagnostics');
-        const data = await res.json();
-        renderJson('diag-output', data);
-    } catch (err) {
-        document.getElementById('diag-output').textContent = 'Diagnostics error';
-    }
-}
-
-async function refreshLogs() {
-    try {
-        const res = await fetch('/api/logs');
-        const data = await res.json();
-        renderJson('log-output', data);
-    } catch (err) {
-        document.getElementById('log-output').textContent = 'Logs error';
-    }
-}
-
 async function clearLogs() {
     try {
         await fetch('/api/logs/clear', { method: 'POST' });
-        refreshLogs();
+        document.getElementById('log-output').textContent = '(cleared)';
     } catch (err) {
         document.getElementById('log-output').textContent = 'Clear error';
     }
