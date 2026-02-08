@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarczownix Control</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        .card { border: 1px solid #ccc; border-radius: 8px; padding: 20px; margin: 10px; display: inline-block; width: 220px; }
+        .status { width: 20px; height: 20px; border-radius: 50%; display: inline-block; margin-bottom: 10px; background-color: gray; }
+        .status-text { display: inline-block; margin-left: 8px; font-weight: bold; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        .show-btn { background-color: #4CAF50; color: white; border: none; }
+        .hide-btn { background-color: #f44336; color: white; border: none; }
+        .stop-btn { background-color: #777; color: white; border: none; }
+        .row { display: flex; flex-wrap: wrap; justify-content: center; }
+        .panel { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin: 10px; width: 460px; text-align: left; }
+        .panel pre { background: #f7f7f7; padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>Tarczownix Control</h1>
+    <div class="row" id="targets"></div>
+    <div class="row">
+        <div class="panel">
+            <h2>Diagnostics</h2>
+            <button onclick="refreshDiagnostics()">Refresh</button>
+            <pre id="diag-output">(empty)</pre>
+        </div>
+        <div class="panel">
+            <h2>Logs</h2>
+            <button onclick="refreshLogs()">Refresh</button>
+            <button onclick="clearLogs()">Clear</button>
+            <pre id="log-output">(empty)</pre>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
