@@ -55,6 +55,14 @@ function sendCommand(targetId, cmd) {
     }
 }
 
+function setMode(modeName) {
+    sendCommand(0, `mode:${modeName}`);
+}
+
+function triggerGunshot() {
+    sendCommand(0, 'gunshot');
+}
+
 function createTargetCard(id) {
     const container = document.getElementById('targets');
     const card = document.createElement('div');

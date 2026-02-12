@@ -10,22 +10,26 @@ public:
     void stop() override;
     void update() override;
     void handleInput(int targetId, String cmd) override;
+    void setTimings(int t1Delay, int t1Duration, int t2Delay, int t2Duration, int t3Delay, int t3Duration);
+    void requestGunshot();
     void onGunshot();
     CompetitionState getState() const { return _state; }
 
 private:
+    int clampMs(int value, int minValue, int maxValue) const;
+
     CompetitionState _state;
     unsigned long _sequenceStartTime;
-    
-    // Delays and durations (hardcoded for now, or loaded from settings later)
-    const int T1_DELAY = 0;
-    const int T1_DURATION = 2000;
-    const int T2_DELAY = 1000;
-    const int T2_DURATION = 2000;
-    const int T3_DELAY = 2000;
-    const int T3_DURATION = 2000;
+
+    int _t1Delay;
+    int _t1Duration;
+    int _t2Delay;
+    int _t2Duration;
+    int _t3Delay;
+    int _t3Duration;
     
     bool _t1Shown, _t1Hidden;
     bool _t2Shown, _t2Hidden;
     bool _t3Shown, _t3Hidden;
+    bool _gunshotPending;
 };

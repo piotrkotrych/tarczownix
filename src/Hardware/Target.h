@@ -12,6 +12,8 @@ public:
     void hide();
     void stop();
     void update();
+    void setTimeoutMs(unsigned long timeoutMs);
+    void setDeadtimeMs(unsigned long deadtimeMs);
     TargetState getState();
     bool isPendingMove() const { return _pendingMove; }
     bool isPendingShow() const { return _pendingShow; }
@@ -30,6 +32,6 @@ private:
     bool _pendingMove;
     bool _pendingShow;
     unsigned long _pendingStartTime;
-    const unsigned long TIMEOUT_MS = 5000;
-    const unsigned long DEADTIME_MS = 50;
+    unsigned long _timeoutMs;
+    unsigned long _deadtimeMs;
 };

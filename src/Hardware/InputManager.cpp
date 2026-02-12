@@ -36,6 +36,9 @@ void InputManager::update() {
 }
 
 bool InputManager::isActive(int pin) {
+    if (pin < 0 || pin > 7) {
+        return false;
+    }
     // Active LOW
     return !(_stableState & (1 << pin));
 }

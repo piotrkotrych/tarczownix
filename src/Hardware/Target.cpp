@@ -4,7 +4,21 @@
 Target::Target(RelayManager* relays, InputManager* inputs, int showRelay, int hideRelay, int sensorShown, int sensorHidden)
     : _relays(relays), _inputs(inputs), _showRelay(showRelay), _hideRelay(hideRelay), 
     _sensorShown(sensorShown), _sensorHidden(sensorHidden), _state(HIDDEN), _moveStartTime(0),
-    _pendingMove(false), _pendingShow(false), _pendingStartTime(0) {
+    _pendingMove(false), _pendingShow(false), _pendingStartTime(0), _timeoutMs(5000), _deadtimeMs(50) {
+}
+
+void Target::setTimeoutMs(unsigned long timeoutMs) {
+    if (timeoutMs < 500) {
+        timeoutMs = 500;
+    }
+    _timeoutMs = timeoutMs;
+}
+
+void Target::setDeadtimeMs(unsigned long deadtimeMs) {
+    if (deadtimeMs > 500) {
+        deadtimeMs = 500;
+    }
+    _deadtimeMs = deadtimeMs;
 }
 
 void Target::show() {
@@ -57,7 +71,7 @@ void Target::stop() {
 
 void Target::update() {
     if (_pendingMove) {
-        if (millis() - _pendingStartTime >= DEADTIME_MS) {
+        if (millis() - _pendingStartTime >= _deadtimeMs) {
             if (_pendingShow) {
                 _relays->set(_showRelay, true);
                 _relays->commit();
@@ -80,7 +94,7 @@ void Target::update() {
             stop();
             _state = SHOWN;
             DebugLogger::instance().log("Target show: sensor reached");
-        } else if (millis() - _moveStartTime > TIMEOUT_MS) {
+        } else if (millis() - _moveStartTime > _timeoutMs) {
             stop();
             _state = ERROR;
             DebugLogger::instance().log("Target show: timeout -> ERROR");
@@ -90,7 +104,7 @@ void Target::update() {
             stop();
             _state = HIDDEN;
             DebugLogger::instance().log("Target hide: sensor reached");
-        } else if (millis() - _moveStartTime > TIMEOUT_MS) {
+        } else if (millis() - _moveStartTime > _timeoutMs) {
             stop();
             _state = ERROR;
             DebugLogger::instance().log("Target hide: timeout -> ERROR");

@@ -11,6 +11,7 @@ struct Config {
     int t2Duration;
     int t3Delay;
     int t3Duration;
+    int targetTimeoutMs;
 };
 
 class SettingsManager {

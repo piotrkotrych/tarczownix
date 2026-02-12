@@ -1,13 +1,36 @@
 #include "ModeCompetition.h"
 
 ModeCompetition::ModeCompetition(Target* t1, Target* t2, Target* t3) 
-    : GameMode(t1, t2, t3), _state(WAITING_START) {
+    : GameMode(t1, t2, t3), _state(WAITING_START),
+      _t1Delay(0), _t1Duration(2000),
+      _t2Delay(1000), _t2Duration(2000),
+      _t3Delay(2000), _t3Duration(2000),
+      _t1Shown(false), _t1Hidden(false),
+      _t2Shown(false), _t2Hidden(false),
+      _t3Shown(false), _t3Hidden(false),
+      _gunshotPending(false) {
+}
+
+int ModeCompetition::clampMs(int value, int minValue, int maxValue) const {
+    if (value < minValue) return minValue;
+    if (value > maxValue) return maxValue;
+    return value;
+}
+
+void ModeCompetition::setTimings(int t1Delay, int t1Duration, int t2Delay, int t2Duration, int t3Delay, int t3Duration) {
+    _t1Delay = clampMs(t1Delay, 0, 60000);
+    _t1Duration = clampMs(t1Duration, 100, 60000);
+    _t2Delay = clampMs(t2Delay, 0, 60000);
+    _t2Duration = clampMs(t2Duration, 100, 60000);
+    _t3Delay = clampMs(t3Delay, 0, 60000);
+    _t3Duration = clampMs(t3Duration, 100, 60000);
 }
 
 void ModeCompetition::start() {
     _t1->hide();
     _t2->hide();
     _t3->hide();
+    _gunshotPending = false;
     _state = WAITING_MIC;
     Serial.println("Competition Mode: Waiting for Gunshot...");
 }
@@ -24,35 +47,40 @@ void ModeCompetition::update() {
     _t2->update();
     _t3->update();
 
+    if (_gunshotPending) {
+        _gunshotPending = false;
+        onGunshot();
+    }
+
     if (_state == RUNNING_SEQUENCE) {
         unsigned long elapsed = millis() - _sequenceStartTime;
 
         // Target 1
-        if (elapsed > T1_DELAY && !_t1Shown) {
+        if (elapsed > (unsigned long)_t1Delay && !_t1Shown) {
             _t1->show();
             _t1Shown = true;
         }
-        if (elapsed > (T1_DELAY + T1_DURATION) && !_t1Hidden) {
+        if (elapsed > (unsigned long)(_t1Delay + _t1Duration) && !_t1Hidden) {
             _t1->hide();
             _t1Hidden = true;
         }
 
         // Target 2
-        if (elapsed > T2_DELAY && !_t2Shown) {
+        if (elapsed > (unsigned long)_t2Delay && !_t2Shown) {
             _t2->show();
             _t2Shown = true;
         }
-        if (elapsed > (T2_DELAY + T2_DURATION) && !_t2Hidden) {
+        if (elapsed > (unsigned long)(_t2Delay + _t2Duration) && !_t2Hidden) {
             _t2->hide();
             _t2Hidden = true;
         }
 
         // Target 3
-        if (elapsed > T3_DELAY && !_t3Shown) {
+        if (elapsed > (unsigned long)_t3Delay && !_t3Shown) {
             _t3->show();
             _t3Shown = true;
         }
-        if (elapsed > (T3_DELAY + T3_DURATION) && !_t3Hidden) {
+        if (elapsed > (unsigned long)(_t3Delay + _t3Duration) && !_t3Hidden) {
             _t3->hide();
             _t3Hidden = true;
         }
@@ -70,6 +98,10 @@ void ModeCompetition::handleInput(int targetId, String cmd) {
     if (cmd == "stop") {
         stop();
     }
+}
+
+void ModeCompetition::requestGunshot() {
+    _gunshotPending = true;
 }
 
 void ModeCompetition::onGunshot() {

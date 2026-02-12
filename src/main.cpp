@@ -30,6 +30,24 @@ GameManager gameManager(&target1, &target2, &target3);
 NetworkManager networkManager;
 SettingsManager settingsManager;
 
+static volatile bool gunshotPending = false;
+static portMUX_TYPE gunshotMux = portMUX_INITIALIZER_UNLOCKED;
+
+static void setGunshotPending() {
+    portENTER_CRITICAL(&gunshotMux);
+    gunshotPending = true;
+    portEXIT_CRITICAL(&gunshotMux);
+}
+
+static bool takeGunshotPending() {
+    bool pending = false;
+    portENTER_CRITICAL(&gunshotMux);
+    pending = gunshotPending;
+    gunshotPending = false;
+    portEXIT_CRITICAL(&gunshotMux);
+    return pending;
+}
+
 static const char* toStateString(TargetState state) {
     switch (state) {
         case HIDDEN: return "HIDDEN";
@@ -64,10 +82,7 @@ void setup() {
      microphone.begin(); // initialize microphone (uses its default/configured ADC pin)
      microphone.setThreshold(settingsManager.getConfig().micThreshold);
      microphone.setCallback([]() {
-         // Trigger competition mode gunshot event
-         if (gameManager.getCompetitionMode()) {
-             gameManager.getCompetitionMode()->onGunshot();
-         }
+         setGunshotPending();
      });
 
     // 4. Initialize Network
@@ -83,6 +98,7 @@ void setup() {
     });
 
     // 5. Initialize Game Manager
+    gameManager.applyConfig(settingsManager.getConfig());
     // (Optional: set default mode)
     gameManager.setMode("manual"); // Start in manual mode by default
 
@@ -95,6 +111,11 @@ void loop() {
     // relayManager.update(); // RelayManager commits immediately in set(), but if we add buffering later...
     
     networkManager.update();
+
+    if (takeGunshotPending()) {
+        gameManager.requestGunshot();
+    }
+
     gameManager.update();
     
     // Broadcast status on state change (and at least once per second)

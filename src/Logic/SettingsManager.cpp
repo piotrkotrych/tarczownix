@@ -1,5 +1,22 @@
 #include "SettingsManager.h"
 
+static int clampInt(int value, int minValue, int maxValue) {
+    if (value < minValue) return minValue;
+    if (value > maxValue) return maxValue;
+    return value;
+}
+
+static void sanitizeConfig(Config& cfg) {
+    cfg.micThreshold = clampInt(cfg.micThreshold, 100, 4095);
+    cfg.t1Delay = clampInt(cfg.t1Delay, 0, 60000);
+    cfg.t1Duration = clampInt(cfg.t1Duration, 100, 60000);
+    cfg.t2Delay = clampInt(cfg.t2Delay, 0, 60000);
+    cfg.t2Duration = clampInt(cfg.t2Duration, 100, 60000);
+    cfg.t3Delay = clampInt(cfg.t3Delay, 0, 60000);
+    cfg.t3Duration = clampInt(cfg.t3Duration, 100, 60000);
+    cfg.targetTimeoutMs = clampInt(cfg.targetTimeoutMs, 500, 120000);
+}
+
 SettingsManager::SettingsManager() {
     // Defaults
     _config.micThreshold = 2000;
@@ -9,10 +26,11 @@ SettingsManager::SettingsManager() {
     _config.t2Duration = 2000;
     _config.t3Delay = 2000;
     _config.t3Duration = 2000;
+    _config.targetTimeoutMs = 5000;
 }
 
 void SettingsManager::begin() {
-    if (!LittleFS.begin(true)) {
+    if (!LittleFS.begin(false)) {
         Serial.println("LittleFS Mount Failed");
         return;
     }
@@ -32,9 +50,11 @@ void SettingsManager::load() {
             _config.t2Duration = doc["t2Duration"] | 2000;
             _config.t3Delay = doc["t3Delay"] | 2000;
             _config.t3Duration = doc["t3Duration"] | 2000;
+            _config.targetTimeoutMs = doc["targetTimeoutMs"] | 5000;
         }
         file.close();
     }
+    sanitizeConfig(_config);
 }
 
 void SettingsManager::save() {
@@ -46,6 +66,7 @@ void SettingsManager::save() {
     doc["t2Duration"] = _config.t2Duration;
     doc["t3Delay"] = _config.t3Delay;
     doc["t3Duration"] = _config.t3Duration;
+    doc["targetTimeoutMs"] = _config.targetTimeoutMs;
 
     File file = LittleFS.open(_filename, "w");
     serializeJson(doc, file);
@@ -53,6 +74,7 @@ void SettingsManager::save() {
 }
 
 String SettingsManager::getJson() {
+    sanitizeConfig(_config);
     JsonDocument doc;
     doc["micThreshold"] = _config.micThreshold;
     doc["t1Delay"] = _config.t1Delay;
@@ -61,6 +83,7 @@ String SettingsManager::getJson() {
     doc["t2Duration"] = _config.t2Duration;
     doc["t3Delay"] = _config.t3Delay;
     doc["t3Duration"] = _config.t3Duration;
+    doc["targetTimeoutMs"] = _config.targetTimeoutMs;
     
     String output;
     serializeJson(doc, output);

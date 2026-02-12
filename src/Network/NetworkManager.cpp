@@ -11,6 +11,23 @@
 #include "../Hardware/InputManager.h"
 #include "../Hardware/RelayManager.h"
 
+static int clampInt(int value, int minValue, int maxValue) {
+    if (value < minValue) return minValue;
+    if (value > maxValue) return maxValue;
+    return value;
+}
+
+static void sanitizeConfig(Config& cfg) {
+    cfg.micThreshold = clampInt(cfg.micThreshold, 100, 4095);
+    cfg.t1Delay = clampInt(cfg.t1Delay, 0, 60000);
+    cfg.t1Duration = clampInt(cfg.t1Duration, 100, 60000);
+    cfg.t2Delay = clampInt(cfg.t2Delay, 0, 60000);
+    cfg.t2Duration = clampInt(cfg.t2Duration, 100, 60000);
+    cfg.t3Delay = clampInt(cfg.t3Delay, 0, 60000);
+    cfg.t3Duration = clampInt(cfg.t3Duration, 100, 60000);
+    cfg.targetTimeoutMs = clampInt(cfg.targetTimeoutMs, 500, 120000);
+}
+
 static const char* toStateString(TargetState state) {
     switch (state) {
         case HIDDEN: return "HIDDEN";
@@ -63,7 +80,7 @@ void NetworkManager::setRelayManager(RelayManager* relayManager) {
 
 void NetworkManager::begin() {
     // Initialize LittleFS
-    if(!LittleFS.begin(true)){
+    if(!LittleFS.begin(false)){
         Serial.println("An Error has occurred while mounting LittleFS");
         return;
     }
@@ -179,11 +196,18 @@ void NetworkManager::_setupRoutes() {
         if (obj["t2Duration"].is<int>()) cfg.t2Duration = obj["t2Duration"].as<int>();
         if (obj["t3Delay"].is<int>()) cfg.t3Delay = obj["t3Delay"].as<int>();
         if (obj["t3Duration"].is<int>()) cfg.t3Duration = obj["t3Duration"].as<int>();
+        if (obj["targetTimeoutMs"].is<int>()) cfg.targetTimeoutMs = obj["targetTimeoutMs"].as<int>();
+
+        sanitizeConfig(cfg);
 
         _settingsManager->save();
 
         if (_microphone) {
             _microphone->setThreshold(cfg.micThreshold);
+        }
+
+        if (_gameManager) {
+            _gameManager->applyConfig(cfg);
         }
 
         request->send(200, "application/json", _settingsManager->getJson());

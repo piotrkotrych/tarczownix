@@ -7,9 +7,10 @@ A sophisticated ESP32-based motor control system for managing 6 relays controlli
 ### 🚀 Core Functionality
 - **3 Motor Pairs**: Controls 6 relays organized in 3 alternating pairs (0↔1, 2↔3, 4↔5)
 - **Safety-First Design**: Only one relay per motor pair can be active at any time
-- **1-Second Timeout Protection**: Automatic shutdown if motors don't reach limit switches
+- **Configurable Timeout Protection**: Automatic shutdown if motors don't reach limit switches
 - **Configurable Delays**: Individual min/max delay settings for each relay (100ms - 20s)
 - **Persistent Configuration**: Settings saved to ESP32 flash memory
+- **Modes**: `manual`, `sequence` (randomized training sequence), `competition` (gunshot-armed timed run)
 
 ### 🌐 Web Interface
 - **Real-time Monitoring**: Live status updates with auto-refresh
@@ -27,12 +28,11 @@ A sophisticated ESP32-based motor control system for managing 6 relays controlli
 
 ### 📡 API Endpoints
 - `GET /` - Main web interface
-- `GET /start` - Start motor sequence (relays 0, 2, 4)
-- `GET /stop` - Emergency stop all motors
-- `GET /status` - JSON status data with real-time information
-- `GET /config` - Current configuration in JSON format
-- `GET /set-delay?relay=X&min=Y&max=Z` - Update relay timing
-- `GET /clear-error` - Clear error messages
+- `GET /api/settings` - Current configuration in JSON format
+- `POST /api/settings` - Update configuration (`micThreshold`, `t1Delay`, `t1Duration`, `t2Delay`, `t2Duration`, `t3Delay`, `t3Duration`, `targetTimeoutMs`)
+- `GET /api/diagnostics` - JSON diagnostics
+- `GET /api/logs` - Retrieve in-memory logs
+- `POST /api/logs/clear` - Clear logs
 
 ## Hardware Requirements
 
