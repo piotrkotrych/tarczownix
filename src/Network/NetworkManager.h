@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "../Logic/SettingsManager.h"
 
 class SettingsManager;
 class Microphone;
@@ -15,12 +16,11 @@ class RelayManager;
 
 class NetworkManager {
 public:
-    using CommandCallback = std::function<void(int targetId, String action)>;
-
     NetworkManager();
     void begin();
     void update();
-    void setCommandCallback(CommandCallback callback);
+    bool getNextCommand(int& targetId, String& action);
+    bool takePendingConfig(Config& config);
     void broadcastStatus(String json);
     void broadcastEvent(const char* type, const String& payload);
     String getDiagnosticsJson();
@@ -37,7 +37,21 @@ private:
     DNSServer _dnsServer;
     AsyncWebServer _server;
     AsyncWebSocket _ws;
-    CommandCallback _commandCallback;
+    portMUX_TYPE _queueMux;
+
+    struct QueuedCommand {
+        int targetId;
+        char action[32];
+    };
+
+    static const size_t COMMAND_QUEUE_SIZE = 8;
+    QueuedCommand _commandQueue[COMMAND_QUEUE_SIZE];
+    size_t _commandHead;
+    size_t _commandTail;
+    size_t _commandCount;
+
+    bool _hasPendingConfig;
+    Config _pendingConfig;
 
     SettingsManager* _settingsManager = nullptr;
     Microphone* _microphone = nullptr;
@@ -49,6 +63,8 @@ private:
     RelayManager* _relayManager = nullptr;
 
     void _setupRoutes();
+    bool _enqueueCommand(int targetId, const String& action);
+    void _enqueueConfig(const Config& config);
     void _handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
     void _onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 };

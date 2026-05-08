@@ -89,6 +89,7 @@ function updateStatus(id, state) {
     if (state === 'SHOWN') color = 'green';
     else if (state === 'HIDDEN') color = 'red';
     else if (state === 'MOVING_SHOW' || state === 'MOVING_HIDE') color = 'orange';
+    else if (state === 'STOPPED') color = 'gray';
     else if (state === 'ERROR') color = 'black';
     
     statusDiv.style.backgroundColor = color;

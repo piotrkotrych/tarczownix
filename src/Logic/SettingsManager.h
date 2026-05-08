@@ -21,7 +21,9 @@ public:
     void load();
     void save();
     String getJson();
+    String toJson(const Config& config);
     Config& getConfig();
+    void setConfig(const Config& config);
 
 private:
     Config _config;

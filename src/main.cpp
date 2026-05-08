@@ -29,6 +29,7 @@ Target target3(&relayManager, &inputManager, 4, 5, 4, 5);
 GameManager gameManager(&target1, &target2, &target3);
 NetworkManager networkManager;
 SettingsManager settingsManager;
+static bool hardwareReady = false;
 
 static volatile bool gunshotPending = false;
 static portMUX_TYPE gunshotMux = portMUX_INITIALIZER_UNLOCKED;
@@ -54,6 +55,7 @@ static const char* toStateString(TargetState state) {
         case MOVING_SHOW: return "MOVING_SHOW";
         case SHOWN: return "SHOWN";
         case MOVING_HIDE: return "MOVING_HIDE";
+        case STOPPED: return "STOPPED";
         case ERROR: return "ERROR";
         default: return "UNKNOWN";
     }
@@ -68,15 +70,21 @@ void setup() {
     
     // 2. Initialize I2C / PCF8574
     Wire.begin(4, 15);
-    if (!pcfInputs.begin()) {
+    const bool inputsOk = pcfInputs.begin();
+    if (!inputsOk) {
         Serial.println("ERROR: Input PCF8574 init failed!");
     }
-    if (!pcfRelays.begin()) {
+    const bool relaysOk = pcfRelays.begin();
+    if (!relaysOk) {
         Serial.println("ERROR: Relay PCF8574 init failed!");
     }
+    hardwareReady = inputsOk && relaysOk;
 
     inputManager.begin();
     relayManager.begin();
+    if (!hardwareReady) {
+        DebugLogger::instance().log("Hardware init failed; movement commands disabled");
+    }
 
      // 3. Initialize Microphone
      microphone.begin(); // initialize microphone (uses its default/configured ADC pin)
@@ -93,9 +101,6 @@ void setup() {
     networkManager.setInputManager(&inputManager);
     networkManager.setRelayManager(&relayManager);
     networkManager.begin();
-    networkManager.setCommandCallback([](int targetId, String action) {
-        gameManager.handleWebInput(targetId, action);
-    });
 
     // 5. Initialize Game Manager
     gameManager.applyConfig(settingsManager.getConfig());
@@ -112,11 +117,38 @@ void loop() {
     
     networkManager.update();
 
-    if (takeGunshotPending()) {
-        gameManager.requestGunshot();
+    Config pendingConfig;
+    if (networkManager.takePendingConfig(pendingConfig)) {
+        settingsManager.setConfig(pendingConfig);
+        settingsManager.save();
+        microphone.setThreshold(settingsManager.getConfig().micThreshold);
+        gameManager.applyConfig(settingsManager.getConfig());
+        DebugLogger::instance().log("Settings update applied");
     }
 
-    gameManager.update();
+    int targetId = 0;
+    String action;
+    if (hardwareReady) {
+        while (networkManager.getNextCommand(targetId, action)) {
+            gameManager.handleWebInput(targetId, action);
+        }
+
+        if (takeGunshotPending()) {
+            gameManager.requestGunshot();
+        }
+
+        gameManager.update();
+        relayManager.commit();
+    } else {
+        bool commandDropped = false;
+        while (networkManager.getNextCommand(targetId, action)) {
+            commandDropped = true;
+        }
+        if (commandDropped) {
+            DebugLogger::instance().log("Movement command ignored: hardware unavailable");
+        }
+        relayManager.commit();
+    }
     
     // Broadcast status on state change (and at least once per second)
     static TargetState last1 = (TargetState)-1;

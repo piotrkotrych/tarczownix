@@ -3,7 +3,7 @@
 #include "RelayManager.h"
 #include "InputManager.h"
 
-enum TargetState { HIDDEN, MOVING_SHOW, SHOWN, MOVING_HIDE, ERROR };
+enum TargetState { HIDDEN, MOVING_SHOW, SHOWN, MOVING_HIDE, STOPPED, ERROR };
 
 class Target {
 public:

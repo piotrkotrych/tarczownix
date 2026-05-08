@@ -75,15 +75,21 @@ void SettingsManager::save() {
 
 String SettingsManager::getJson() {
     sanitizeConfig(_config);
+    return toJson(_config);
+}
+
+String SettingsManager::toJson(const Config& config) {
+    Config sanitized = config;
+    sanitizeConfig(sanitized);
     JsonDocument doc;
-    doc["micThreshold"] = _config.micThreshold;
-    doc["t1Delay"] = _config.t1Delay;
-    doc["t1Duration"] = _config.t1Duration;
-    doc["t2Delay"] = _config.t2Delay;
-    doc["t2Duration"] = _config.t2Duration;
-    doc["t3Delay"] = _config.t3Delay;
-    doc["t3Duration"] = _config.t3Duration;
-    doc["targetTimeoutMs"] = _config.targetTimeoutMs;
+    doc["micThreshold"] = sanitized.micThreshold;
+    doc["t1Delay"] = sanitized.t1Delay;
+    doc["t1Duration"] = sanitized.t1Duration;
+    doc["t2Delay"] = sanitized.t2Delay;
+    doc["t2Duration"] = sanitized.t2Duration;
+    doc["t3Delay"] = sanitized.t3Delay;
+    doc["t3Duration"] = sanitized.t3Duration;
+    doc["targetTimeoutMs"] = sanitized.targetTimeoutMs;
     
     String output;
     serializeJson(doc, output);
@@ -92,4 +98,9 @@ String SettingsManager::getJson() {
 
 Config& SettingsManager::getConfig() {
     return _config;
+}
+
+void SettingsManager::setConfig(const Config& config) {
+    _config = config;
+    sanitizeConfig(_config);
 }

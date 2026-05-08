@@ -5,9 +5,10 @@ ModeCompetition::ModeCompetition(Target* t1, Target* t2, Target* t3)
       _t1Delay(0), _t1Duration(2000),
       _t2Delay(1000), _t2Duration(2000),
       _t3Delay(2000), _t3Duration(2000),
-      _t1Shown(false), _t1Hidden(false),
-      _t2Shown(false), _t2Hidden(false),
-      _t3Shown(false), _t3Hidden(false),
+      _t1Shown(false), _t1HideIssued(false), _t1Hidden(false),
+      _t2Shown(false), _t2HideIssued(false), _t2Hidden(false),
+      _t3Shown(false), _t3HideIssued(false), _t3Hidden(false),
+      _t1ShownAt(0), _t2ShownAt(0), _t3ShownAt(0),
       _gunshotPending(false) {
 }
 
@@ -55,33 +56,48 @@ void ModeCompetition::update() {
     if (_state == RUNNING_SEQUENCE) {
         unsigned long elapsed = millis() - _sequenceStartTime;
 
-        // Target 1
         if (elapsed > (unsigned long)_t1Delay && !_t1Shown) {
             _t1->show();
             _t1Shown = true;
         }
-        if (elapsed > (unsigned long)(_t1Delay + _t1Duration) && !_t1Hidden) {
+        if (_t1Shown && _t1ShownAt == 0 && _t1->getState() == SHOWN) {
+            _t1ShownAt = millis();
+        }
+        if (_t1ShownAt > 0 && millis() - _t1ShownAt >= (unsigned long)_t1Duration && !_t1HideIssued) {
             _t1->hide();
+            _t1HideIssued = true;
+        }
+        if (_t1HideIssued && _t1->getState() == HIDDEN) {
             _t1Hidden = true;
         }
 
-        // Target 2
         if (elapsed > (unsigned long)_t2Delay && !_t2Shown) {
             _t2->show();
             _t2Shown = true;
         }
-        if (elapsed > (unsigned long)(_t2Delay + _t2Duration) && !_t2Hidden) {
+        if (_t2Shown && _t2ShownAt == 0 && _t2->getState() == SHOWN) {
+            _t2ShownAt = millis();
+        }
+        if (_t2ShownAt > 0 && millis() - _t2ShownAt >= (unsigned long)_t2Duration && !_t2HideIssued) {
             _t2->hide();
+            _t2HideIssued = true;
+        }
+        if (_t2HideIssued && _t2->getState() == HIDDEN) {
             _t2Hidden = true;
         }
 
-        // Target 3
         if (elapsed > (unsigned long)_t3Delay && !_t3Shown) {
             _t3->show();
             _t3Shown = true;
         }
-        if (elapsed > (unsigned long)(_t3Delay + _t3Duration) && !_t3Hidden) {
+        if (_t3Shown && _t3ShownAt == 0 && _t3->getState() == SHOWN) {
+            _t3ShownAt = millis();
+        }
+        if (_t3ShownAt > 0 && millis() - _t3ShownAt >= (unsigned long)_t3Duration && !_t3HideIssued) {
             _t3->hide();
+            _t3HideIssued = true;
+        }
+        if (_t3HideIssued && _t3->getState() == HIDDEN) {
             _t3Hidden = true;
         }
         
@@ -108,9 +124,10 @@ void ModeCompetition::onGunshot() {
     if (_state == WAITING_MIC) {
         _state = RUNNING_SEQUENCE;
         _sequenceStartTime = millis();
-        _t1Shown = false; _t1Hidden = false;
-        _t2Shown = false; _t2Hidden = false;
-        _t3Shown = false; _t3Hidden = false;
+        _t1Shown = false; _t1HideIssued = false; _t1Hidden = false;
+        _t2Shown = false; _t2HideIssued = false; _t2Hidden = false;
+        _t3Shown = false; _t3HideIssued = false; _t3Hidden = false;
+        _t1ShownAt = 0; _t2ShownAt = 0; _t3ShownAt = 0;
         Serial.println("Competition Mode: Gunshot Detected! Sequence Started.");
     }
 }

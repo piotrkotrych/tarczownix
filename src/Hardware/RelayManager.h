@@ -7,8 +7,9 @@ public:
     RelayManager(PCF8574* pcf);
     void begin();
     void set(int pin, bool active);
-    void commit();
+    bool commit();
     uint8_t getShadowRegister() const { return _shadowRegister; }
+    bool lastWriteOk() const { return _lastWriteOk; }
 
 private:
     bool isValidPin(int pin) const;
@@ -17,4 +18,6 @@ private:
     PCF8574* _pcf;
     uint8_t _shadowRegister;
     bool _dirty;
+    bool _lastWriteOk;
+    unsigned long _lastFailureLogMs;
 };

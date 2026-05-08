@@ -1,6 +1,8 @@
 #include "RelayManager.h"
+#include "../Logic/DebugLogger.h"
 
-RelayManager::RelayManager(PCF8574* pcf) : _pcf(pcf), _shadowRegister(0xFF), _dirty(true) {
+RelayManager::RelayManager(PCF8574* pcf)
+    : _pcf(pcf), _shadowRegister(0xFF), _dirty(true), _lastWriteOk(true), _lastFailureLogMs(0) {
 }
 
 bool RelayManager::isValidPin(int pin) const {
@@ -43,22 +45,36 @@ void RelayManager::set(int pin, bool active) {
     }
 }
 
-void RelayManager::commit() {
-    if (_dirty) {
-#ifdef PCF8574_LOW_MEMORY
-        _pcf->digitalWriteAll(_shadowRegister);
-#else
-        PCF8574::DigitalInput all;
-        all.p0 = (_shadowRegister & (1 << 0)) ? HIGH : LOW;
-        all.p1 = (_shadowRegister & (1 << 1)) ? HIGH : LOW;
-        all.p2 = (_shadowRegister & (1 << 2)) ? HIGH : LOW;
-        all.p3 = (_shadowRegister & (1 << 3)) ? HIGH : LOW;
-        all.p4 = (_shadowRegister & (1 << 4)) ? HIGH : LOW;
-        all.p5 = (_shadowRegister & (1 << 5)) ? HIGH : LOW;
-        all.p6 = (_shadowRegister & (1 << 6)) ? HIGH : LOW;
-        all.p7 = (_shadowRegister & (1 << 7)) ? HIGH : LOW;
-        _pcf->digitalWriteAll(all);
-#endif
-        _dirty = false;
+bool RelayManager::commit() {
+    if (!_dirty) {
+        return _lastWriteOk;
     }
+
+    bool ok = false;
+#ifdef PCF8574_LOW_MEMORY
+    ok = _pcf->digitalWriteAll(_shadowRegister);
+#else
+    PCF8574::DigitalInput all;
+    all.p0 = (_shadowRegister & (1 << 0)) ? HIGH : LOW;
+    all.p1 = (_shadowRegister & (1 << 1)) ? HIGH : LOW;
+    all.p2 = (_shadowRegister & (1 << 2)) ? HIGH : LOW;
+    all.p3 = (_shadowRegister & (1 << 3)) ? HIGH : LOW;
+    all.p4 = (_shadowRegister & (1 << 4)) ? HIGH : LOW;
+    all.p5 = (_shadowRegister & (1 << 5)) ? HIGH : LOW;
+    all.p6 = (_shadowRegister & (1 << 6)) ? HIGH : LOW;
+    all.p7 = (_shadowRegister & (1 << 7)) ? HIGH : LOW;
+    ok = _pcf->digitalWriteAll(all);
+#endif
+
+    _lastWriteOk = ok;
+    if (ok) {
+        _dirty = false;
+    } else {
+        if (millis() - _lastFailureLogMs > 1000) {
+            DebugLogger::instance().log("Relay write failed; retry pending");
+            _lastFailureLogMs = millis();
+        }
+    }
+
+    return ok;
 }

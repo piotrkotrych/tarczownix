@@ -28,8 +28,11 @@ private:
     int _t3Delay;
     int _t3Duration;
     
-    bool _t1Shown, _t1Hidden;
-    bool _t2Shown, _t2Hidden;
-    bool _t3Shown, _t3Hidden;
+    bool _t1Shown, _t1HideIssued, _t1Hidden;
+    bool _t2Shown, _t2HideIssued, _t2Hidden;
+    bool _t3Shown, _t3HideIssued, _t3Hidden;
+    unsigned long _t1ShownAt;
+    unsigned long _t2ShownAt;
+    unsigned long _t3ShownAt;
     bool _gunshotPending;
 };

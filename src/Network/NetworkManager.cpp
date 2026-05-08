@@ -34,6 +34,7 @@ static const char* toStateString(TargetState state) {
         case MOVING_SHOW: return "MOVING_SHOW";
         case SHOWN: return "SHOWN";
         case MOVING_HIDE: return "MOVING_HIDE";
+        case STOPPED: return "STOPPED";
         case ERROR: return "ERROR";
         default: return "UNKNOWN";
     }
@@ -49,7 +50,9 @@ static const char* toCompetitionStateString(CompetitionState state) {
     }
 }
 
-NetworkManager::NetworkManager() : _server(80), _ws("/ws") {
+NetworkManager::NetworkManager()
+    : _server(80), _ws("/ws"), _queueMux(portMUX_INITIALIZER_UNLOCKED),
+      _commandHead(0), _commandTail(0), _commandCount(0), _hasPendingConfig(false) {
 }
 
 void NetworkManager::setSettingsManager(SettingsManager* settingsManager) {
@@ -109,8 +112,64 @@ void NetworkManager::update() {
     _ws.cleanupClients();
 }
 
-void NetworkManager::setCommandCallback(CommandCallback callback) {
-    _commandCallback = callback;
+bool NetworkManager::_enqueueCommand(int targetId, const String& action) {
+    char actionCopy[sizeof(_commandQueue[0].action)];
+    action.toCharArray(actionCopy, sizeof(actionCopy));
+
+    bool queued = false;
+    portENTER_CRITICAL(&_queueMux);
+    if (_commandCount < COMMAND_QUEUE_SIZE) {
+        QueuedCommand& item = _commandQueue[_commandTail];
+        item.targetId = targetId;
+        strncpy(item.action, actionCopy, sizeof(item.action) - 1);
+        item.action[sizeof(item.action) - 1] = '\0';
+        _commandTail = (_commandTail + 1) % COMMAND_QUEUE_SIZE;
+        _commandCount++;
+        queued = true;
+    }
+    portEXIT_CRITICAL(&_queueMux);
+    return queued;
+}
+
+bool NetworkManager::getNextCommand(int& targetId, String& action) {
+    QueuedCommand item;
+    bool hasCommand = false;
+
+    portENTER_CRITICAL(&_queueMux);
+    if (_commandCount > 0) {
+        item = _commandQueue[_commandHead];
+        _commandHead = (_commandHead + 1) % COMMAND_QUEUE_SIZE;
+        _commandCount--;
+        hasCommand = true;
+    }
+    portEXIT_CRITICAL(&_queueMux);
+
+    if (!hasCommand) {
+        return false;
+    }
+
+    targetId = item.targetId;
+    action = item.action;
+    return true;
+}
+
+void NetworkManager::_enqueueConfig(const Config& config) {
+    portENTER_CRITICAL(&_queueMux);
+    _pendingConfig = config;
+    _hasPendingConfig = true;
+    portEXIT_CRITICAL(&_queueMux);
+}
+
+bool NetworkManager::takePendingConfig(Config& config) {
+    bool hasConfig = false;
+    portENTER_CRITICAL(&_queueMux);
+    if (_hasPendingConfig) {
+        config = _pendingConfig;
+        _hasPendingConfig = false;
+        hasConfig = true;
+    }
+    portEXIT_CRITICAL(&_queueMux);
+    return hasConfig;
 }
 
 void NetworkManager::broadcastStatus(String json) {
@@ -187,7 +246,7 @@ void NetworkManager::_setupRoutes() {
         }
 
         JsonObject obj = json.as<JsonObject>();
-        Config& cfg = _settingsManager->getConfig();
+        Config cfg = _settingsManager->getConfig();
 
         if (obj["micThreshold"].is<int>()) cfg.micThreshold = obj["micThreshold"].as<int>();
         if (obj["t1Delay"].is<int>()) cfg.t1Delay = obj["t1Delay"].as<int>();
@@ -200,17 +259,10 @@ void NetworkManager::_setupRoutes() {
 
         sanitizeConfig(cfg);
 
-        _settingsManager->save();
+        _enqueueConfig(cfg);
+        DebugLogger::instance().log("Settings update queued");
 
-        if (_microphone) {
-            _microphone->setThreshold(cfg.micThreshold);
-        }
-
-        if (_gameManager) {
-            _gameManager->applyConfig(cfg);
-        }
-
-        request->send(200, "application/json", _settingsManager->getJson());
+        request->send(200, "application/json", _settingsManager->toJson(cfg));
     });
     _server.addHandler(settingsPost);
 
@@ -275,7 +327,7 @@ void NetworkManager::_handleWebSocketMessage(void *arg, uint8_t *data, size_t le
     String cmd = doc["cmd"];
 
     DebugLogger::instance().log("WS cmd: target=%d cmd=%s", targetId, cmd.c_str());
-    if (_commandCallback) {
-        _commandCallback(targetId, cmd);
+    if (!_enqueueCommand(targetId, cmd)) {
+        DebugLogger::instance().log("WS cmd dropped: queue full");
     }
 }

@@ -60,11 +60,21 @@ void Target::hide() {
 }
 
 void Target::stop() {
+    const bool wasMoving = (_state == MOVING_SHOW || _state == MOVING_HIDE || _pendingMove);
     _pendingMove = false;
     _relays->set(_showRelay, false);
     _relays->set(_hideRelay, false);
     _relays->commit();
-    if (_state == MOVING_SHOW || _state == MOVING_HIDE) {
+
+    if (_inputs->isActive(_sensorShown)) {
+        _state = SHOWN;
+    } else if (_inputs->isActive(_sensorHidden)) {
+        _state = HIDDEN;
+    } else if (wasMoving) {
+        _state = STOPPED;
+    }
+
+    if (wasMoving) {
         DebugLogger::instance().log("Target stop: relays off");
     }
 }

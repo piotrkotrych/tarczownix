@@ -91,12 +91,34 @@ void ModeSequence::update() {
     }
 
     if (_state == SEQ_SHOWING) {
-        if (elapsed >= _showMs) {
-            Target* target = getTargetById(_activeTargetId);
-            if (target) {
-                target->hide();
-            }
+        Target* target = getTargetById(_activeTargetId);
+        if (target && target->getState() == SHOWN) {
+            _state = SEQ_VISIBLE;
+            _stateStartMs = millis();
+        } else if (target && target->getState() == ERROR) {
+            stop();
+        }
+        return;
+    }
+
+    if (_state == SEQ_VISIBLE) {
+        Target* target = getTargetById(_activeTargetId);
+        if (elapsed >= _showMs && target) {
+            target->hide();
+            _state = SEQ_HIDING;
+            _stateStartMs = millis();
+        } else if (target && target->getState() == ERROR) {
+            stop();
+        }
+        return;
+    }
+
+    if (_state == SEQ_HIDING) {
+        Target* target = getTargetById(_activeTargetId);
+        if (target && target->getState() == HIDDEN) {
             scheduleNextTarget();
+        } else if (target && target->getState() == ERROR) {
+            stop();
         }
     }
 }

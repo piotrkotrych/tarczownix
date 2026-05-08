@@ -11,7 +11,7 @@ public:
     void setTimings(int t1Delay, int t1Duration, int t2Delay, int t2Duration, int t3Delay, int t3Duration);
 
 private:
-    enum SequenceState { SEQ_IDLE, SEQ_WAIT_DELAY, SEQ_SHOWING };
+    enum SequenceState { SEQ_IDLE, SEQ_WAIT_DELAY, SEQ_SHOWING, SEQ_VISIBLE, SEQ_HIDING };
 
     int clampMs(int value, int minValue, int maxValue) const;
     Target* getTargetById(int id);

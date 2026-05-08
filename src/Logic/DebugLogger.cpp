@@ -29,19 +29,26 @@ void DebugLogger::log(const char* fmt, ...) {
 }
 
 String DebugLogger::getJson() {
-    JsonDocument doc;
-    JsonArray arr = doc["logs"].to<JsonArray>();
+    LogEntry snapshot[MAX_LOGS];
+    size_t count = 0;
 
     portENTER_CRITICAL(&_mux);
-    const size_t count = _count;
+    count = _count;
     const size_t start = (_head + MAX_LOGS - count) % MAX_LOGS;
     for (size_t i = 0; i < count; i++) {
         const size_t idx = (start + i) % MAX_LOGS;
-        JsonObject item = arr.add<JsonObject>();
-        item["ms"] = _logs[idx].ms;
-        item["msg"] = _logs[idx].msg;
+        snapshot[i] = _logs[idx];
     }
     portEXIT_CRITICAL(&_mux);
+
+    JsonDocument doc;
+    JsonArray arr = doc["logs"].to<JsonArray>();
+
+    for (size_t i = 0; i < count; i++) {
+        JsonObject item = arr.add<JsonObject>();
+        item["ms"] = snapshot[i].ms;
+        item["msg"] = snapshot[i].msg;
+    }
 
     String out;
     serializeJson(doc, out);
