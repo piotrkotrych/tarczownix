@@ -69,19 +69,20 @@ void setup() {
     settingsManager.begin();
     
     // 2. Initialize I2C / PCF8574
+    // The managers own the expander bring-up: PCF8574::begin() must run *after* the pin
+    // modes are declared, otherwise the initial safe state is never written, inputs read
+    // as permanently active, and begin() reports failure unconditionally.
     Wire.begin(4, 15);
-    const bool inputsOk = pcfInputs.begin();
+    const bool inputsOk = inputManager.begin();
     if (!inputsOk) {
         Serial.println("ERROR: Input PCF8574 init failed!");
     }
-    const bool relaysOk = pcfRelays.begin();
+    const bool relaysOk = relayManager.begin();
     if (!relaysOk) {
         Serial.println("ERROR: Relay PCF8574 init failed!");
     }
     hardwareReady = inputsOk && relaysOk;
 
-    inputManager.begin();
-    relayManager.begin();
     if (!hardwareReady) {
         DebugLogger::instance().log("Hardware init failed; movement commands disabled");
     }
@@ -128,28 +129,25 @@ void loop() {
 
     int targetId = 0;
     String action;
-    if (hardwareReady) {
-        while (networkManager.getNextCommand(targetId, action)) {
-            gameManager.handleWebInput(targetId, action);
-        }
-
-        if (takeGunshotPending()) {
-            gameManager.requestGunshot();
-        }
-
-        gameManager.update();
-        relayManager.commit();
-    } else {
-        bool commandDropped = false;
-        while (networkManager.getNextCommand(targetId, action)) {
-            commandDropped = true;
-        }
-        if (commandDropped) {
+    while (networkManager.getNextCommand(targetId, action)) {
+        // With the expanders down, refuse anything that would energise a motor. Mode
+        // changes, stop and reset stay available so the operator can still work the UI
+        // and see what is wrong.
+        if (!hardwareReady && (action == "show" || action == "hide")) {
             DebugLogger::instance().log("Movement command ignored: hardware unavailable");
+            continue;
         }
-        relayManager.commit();
+        gameManager.handleWebInput(targetId, action);
     }
-    
+
+    if (takeGunshotPending()) {
+        gameManager.requestGunshot();
+    }
+
+    gameManager.update();
+    relayManager.commit();
+
+
     // Broadcast status on state change (and at least once per second)
     static TargetState last1 = (TargetState)-1;
     static TargetState last2 = (TargetState)-1;
@@ -157,38 +155,47 @@ void loop() {
     static unsigned long lastStatusSent = 0;
     static unsigned long lastDiagSent = 0;
     static unsigned long lastLogsSent = 0;
-    static size_t lastLogCount = 0;
+    static unsigned long lastLogSequence = 0;
 
-    const TargetState s1 = target1.getState();
-    const TargetState s2 = target2.getState();
-    const TargetState s3 = target3.getState();
+    // Telemetry is only worth building when somebody is listening; otherwise the device
+    // serialises diagnostics JSON twice a second forever with nowhere to send it.
+    if (networkManager.hasClients()) {
+        const TargetState s1 = target1.getState();
+        const TargetState s2 = target2.getState();
+        const TargetState s3 = target3.getState();
 
-    const bool changed = (s1 != last1) || (s2 != last2) || (s3 != last3);
-    if (changed || (millis() - lastStatusSent > 1000)) {
-        JsonDocument doc;
-        doc["1"] = toStateString(s1);
-        doc["2"] = toStateString(s2);
-        doc["3"] = toStateString(s3);
-        String json;
-        serializeJson(doc, json);
-        networkManager.broadcastEvent("status", json);
+        const bool changed = (s1 != last1) || (s2 != last2) || (s3 != last3);
+        if (changed || (millis() - lastStatusSent > 1000)) {
+            JsonDocument doc;
+            doc["1"] = toStateString(s1);
+            doc["2"] = toStateString(s2);
+            doc["3"] = toStateString(s3);
+            String json;
+            serializeJson(doc, json);
+            networkManager.broadcastEvent("status", json);
 
-        last1 = s1;
-        last2 = s2;
-        last3 = s3;
-        lastStatusSent = millis();
-    }
+            last1 = s1;
+            last2 = s2;
+            last3 = s3;
+            lastStatusSent = millis();
+        }
 
-    if (millis() - lastDiagSent > 500) {
-        networkManager.broadcastEvent("diagnostics", networkManager.getDiagnosticsJson());
-        lastDiagSent = millis();
-    }
+        if (millis() - lastDiagSent > 500) {
+            networkManager.broadcastEvent("diagnostics", networkManager.getDiagnosticsJson());
+            lastDiagSent = millis();
+        }
 
-    const size_t logCount = DebugLogger::instance().getCount();
-    if (logCount != lastLogCount || (millis() - lastLogsSent > 2000)) {
-        networkManager.broadcastEvent("logs", networkManager.getLogsJson());
-        lastLogCount = logCount;
-        lastLogsSent = millis();
+        const unsigned long logSequence = DebugLogger::instance().getSequence();
+        if (logSequence != lastLogSequence || (millis() - lastLogsSent > 2000)) {
+            networkManager.broadcastEvent("logs", networkManager.getLogsJson());
+            lastLogSequence = logSequence;
+            lastLogsSent = millis();
+        }
+    } else {
+        // Make sure the next client to connect gets a full snapshot straight away.
+        last1 = (TargetState)-1;
+        last2 = (TargetState)-1;
+        last3 = (TargetState)-1;
     }
 
     delay(5); // Small yield

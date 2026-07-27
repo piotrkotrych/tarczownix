@@ -52,7 +52,8 @@ static const char* toCompetitionStateString(CompetitionState state) {
 
 NetworkManager::NetworkManager()
     : _server(80), _ws("/ws"), _queueMux(portMUX_INITIALIZER_UNLOCKED),
-      _commandHead(0), _commandTail(0), _commandCount(0), _hasPendingConfig(false) {
+      _commandHead(0), _commandTail(0), _commandCount(0), _hasPendingConfig(false),
+      _filesystemReady(false) {
 }
 
 void NetworkManager::setSettingsManager(SettingsManager* settingsManager) {
@@ -82,10 +83,13 @@ void NetworkManager::setRelayManager(RelayManager* relayManager) {
 }
 
 void NetworkManager::begin() {
-    // Initialize LittleFS
-    if(!LittleFS.begin(false)){
+    // Normally already mounted by SettingsManager; retry here so a late failure only
+    // costs the static assets. Bailing out at this point used to skip the AP entirely,
+    // leaving the device unreachable with no way to diagnose it.
+    _filesystemReady = SettingsManager::mountFilesystem();
+    if (!_filesystemReady) {
         Serial.println("An Error has occurred while mounting LittleFS");
-        return;
+        DebugLogger::instance().log("LittleFS unavailable: web UI assets missing");
     }
 
     // Start WiFi AP
@@ -172,10 +176,6 @@ bool NetworkManager::takePendingConfig(Config& config) {
     return hasConfig;
 }
 
-void NetworkManager::broadcastStatus(String json) {
-    _ws.textAll(json);
-}
-
 void NetworkManager::broadcastEvent(const char* type, const String& payload) {
     String out = String("{\"type\":\"") + type + "\",\"data\":" + payload + "}";
     _ws.textAll(out);
@@ -229,7 +229,9 @@ String NetworkManager::getLogsJson() {
 }
 
 void NetworkManager::_setupRoutes() {
-    _server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+    if (_filesystemReady) {
+        _server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+    }
 
     _server.on("/api/settings", HTTP_GET, [this](AsyncWebServerRequest* request) {
         if (!_settingsManager) {
@@ -298,7 +300,15 @@ void NetworkManager::_setupRoutes() {
         request->send(200, "application/json", "{\"ok\":true}");
     });
 
-    _server.onNotFound([](AsyncWebServerRequest *request) {
+    // Captive-portal catch-all. Redirecting "/" itself (or anything at all when the
+    // assets are missing) would bounce the browser between the same two URLs forever.
+    _server.onNotFound([this](AsyncWebServerRequest* request) {
+        if (!_filesystemReady || request->url() == "/") {
+            request->send(200, "text/html",
+                          "<h1>Tarczownix</h1><p>Web assets are not installed on the device "
+                          "(run: pio run -t uploadfs).</p><p>API is available under /api/.</p>");
+            return;
+        }
         request->redirect("/");
     });
 }
@@ -323,8 +333,25 @@ void NetworkManager::_handleWebSocketMessage(void *arg, uint8_t *data, size_t le
         return;
     }
 
-    int targetId = doc["target"];
-    String cmd = doc["cmd"];
+    // Reject malformed frames instead of queueing a command with an empty action and a
+    // target id that no mode knows what to do with.
+    if (!doc["cmd"].is<const char*>()) {
+        DebugLogger::instance().log("WS cmd dropped: missing 'cmd'");
+        return;
+    }
+
+    String cmd = doc["cmd"].as<String>();
+    cmd.trim();
+    if (cmd.isEmpty()) {
+        DebugLogger::instance().log("WS cmd dropped: empty 'cmd'");
+        return;
+    }
+
+    const int targetId = doc["target"] | 0;
+    if (targetId < 0 || targetId > 3) {
+        DebugLogger::instance().log("WS cmd dropped: bad target=%d", targetId);
+        return;
+    }
 
     DebugLogger::instance().log("WS cmd: target=%d cmd=%s", targetId, cmd.c_str());
     if (!_enqueueCommand(targetId, cmd)) {

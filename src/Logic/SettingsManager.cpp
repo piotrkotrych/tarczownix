@@ -29,9 +29,20 @@ SettingsManager::SettingsManager() {
     _config.targetTimeoutMs = 5000;
 }
 
+// Mounts LittleFS, formatting a virgin/corrupt partition rather than leaving the device
+// with no persistent settings and no web assets. Safe to call more than once.
+bool SettingsManager::mountFilesystem() {
+    if (LittleFS.begin(true)) {
+        return true;
+    }
+    Serial.println("LittleFS Mount Failed");
+    return false;
+}
+
 void SettingsManager::begin() {
-    if (!LittleFS.begin(false)) {
-        Serial.println("LittleFS Mount Failed");
+    if (!mountFilesystem()) {
+        // Keep the built-in defaults; the rest of the system still needs to come up so
+        // the fault is visible over the web UI / serial.
         return;
     }
     load();
@@ -40,6 +51,10 @@ void SettingsManager::begin() {
 void SettingsManager::load() {
     if (LittleFS.exists(_filename)) {
         File file = LittleFS.open(_filename, "r");
+        if (!file) {
+            sanitizeConfig(_config);
+            return;
+        }
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, file);
         if (!error) {
@@ -69,6 +84,10 @@ void SettingsManager::save() {
     doc["targetTimeoutMs"] = _config.targetTimeoutMs;
 
     File file = LittleFS.open(_filename, "w");
+    if (!file) {
+        Serial.println("Settings save failed: cannot open /config.json");
+        return;
+    }
     serializeJson(doc, file);
     file.close();
 }

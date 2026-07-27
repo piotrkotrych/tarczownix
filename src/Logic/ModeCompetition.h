@@ -11,12 +11,15 @@ public:
     void update() override;
     void handleInput(int targetId, String cmd) override;
     void setTimings(int t1Delay, int t1Duration, int t2Delay, int t2Duration, int t3Delay, int t3Duration);
+    // Re-arms the run: hides every target and waits for the next gunshot.
+    void arm();
     void requestGunshot();
     void onGunshot();
     CompetitionState getState() const { return _state; }
 
 private:
     int clampMs(int value, int minValue, int maxValue) const;
+    bool anyTargetInError() const;
 
     CompetitionState _state;
     unsigned long _sequenceStartTime;

@@ -2,7 +2,7 @@
 #include "../Logic/DebugLogger.h"
 
 Microphone::Microphone(int adcPin)
-    : _adcPin(adcPin), _threshold(2000), _callbackMux(portMUX_INITIALIZER_UNLOCKED), _taskHandle(nullptr),
+    : _adcPin(adcPin), _threshold(2000), _callback(nullptr), _taskHandle(nullptr),
       _lastTriggerTime(0), _baseline(2048), _lastValue(0), _lastPeak(0), _lastUpdateMs(0) {
 }
 
@@ -39,9 +39,7 @@ void Microphone::begin() {
 }
 
 void Microphone::setCallback(GunshotCallback callback) {
-    portENTER_CRITICAL(&_callbackMux);
     _callback = callback;
-    portEXIT_CRITICAL(&_callbackMux);
 }
 
 void Microphone::setThreshold(int threshold) {
@@ -57,38 +55,48 @@ void Microphone::_micTask(void* parameter) {
 }
 
 void Microphone::_processAudio() {
-    // Sample a short window and compute max deviation from baseline.
-    int peak = 0;
+    // Sample a short window and measure how far it swings either side of the baseline.
     const int samples = 128;
+    long sum = 0;
+    int minValue = 4095;
+    int maxValue = 0;
     int lastValue = 0;
+
     for (int i = 0; i < samples; i++) {
         const int value = analogRead(_adcPin);
         lastValue = value;
-
-        // Track slowly moving baseline (mic bias) via simple low-pass filter.
-        _baseline = (_baseline * 31 + value) / 32;
-
-        const int deviation = abs(value - _baseline);
-        if (deviation > peak) {
-            peak = deviation;
-        }
+        sum += value;
+        if (value < minValue) minValue = value;
+        if (value > maxValue) maxValue = value;
     }
+
+    const int baseline = _baseline;
+    const int aboveBaseline = maxValue - baseline;
+    const int belowBaseline = baseline - minValue;
+    const int peak = (aboveBaseline > belowBaseline) ? aboveBaseline : belowBaseline;
+    const int threshold = _threshold;
 
     _lastValue = lastValue;
     _lastPeak = peak;
     _lastUpdateMs = millis();
 
-    if (peak > _threshold) {
-        if (millis() - _lastTriggerTime > DEBOUNCE_MS) {
-            _lastTriggerTime = millis();
-            GunshotCallback callbackCopy;
-            portENTER_CRITICAL(&_callbackMux);
-            callbackCopy = _callback;
-            portEXIT_CRITICAL(&_callbackMux);
-            DebugLogger::instance().log("Mic trigger peak=%d threshold=%d baseline=%d", peak, _threshold, _baseline);
-            if (callbackCopy) {
-                callbackCopy();
-            }
-        }
+    // Track the microphone bias between windows, never inside one, and never across a
+    // loud window: adapting per sample let the baseline chase the gunshot itself and
+    // swallowed most of the peak it was supposed to measure.
+    if (peak <= threshold) {
+        const int windowMean = (int)(sum / samples);
+        _baseline = (baseline * 15 + windowMean) / 16;
+        return;
+    }
+
+    if (millis() - _lastTriggerTime <= DEBOUNCE_MS) {
+        return;
+    }
+    _lastTriggerTime = millis();
+
+    DebugLogger::instance().log("Mic trigger peak=%d threshold=%d baseline=%d", peak, threshold, baseline);
+    const GunshotCallback callback = _callback;
+    if (callback) {
+        callback();
     }
 }

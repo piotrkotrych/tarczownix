@@ -21,8 +21,10 @@ public:
     void update();
     bool getNextCommand(int& targetId, String& action);
     bool takePendingConfig(Config& config);
-    void broadcastStatus(String json);
     void broadcastEvent(const char* type, const String& payload);
+    // True when at least one browser is listening; used to skip building telemetry JSON
+    // that nobody would receive.
+    bool hasClients() { return _ws.count() > 0; }
     String getDiagnosticsJson();
     String getLogsJson();
 
@@ -51,6 +53,7 @@ private:
     size_t _commandCount;
 
     bool _hasPendingConfig;
+    bool _filesystemReady;
     Config _pendingConfig;
 
     SettingsManager* _settingsManager = nullptr;

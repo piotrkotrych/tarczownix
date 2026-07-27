@@ -11,6 +11,8 @@ public:
     void show();
     void hide();
     void stop();
+    // Clears a latched ERROR so the target can be commanded again.
+    void reset();
     void update();
     void setTimeoutMs(unsigned long timeoutMs);
     void setDeadtimeMs(unsigned long deadtimeMs);

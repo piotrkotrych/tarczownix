@@ -13,13 +13,23 @@ int RelayManager::pairedPin(int pin) const {
     return (pin % 2 == 0) ? (pin + 1) : (pin - 1);
 }
 
-void RelayManager::begin() {
-    // Configure all expander pins as OUTPUT, default HIGH (relay off)
+bool RelayManager::begin() {
+    // Pin modes must be declared BEFORE PCF8574::begin(): begin() only writes the safe
+    // initial state (and only then reports transmission success) if the write/read masks
+    // are already populated. Calling it the other way round leaves every relay in an
+    // undefined state and makes begin() always report failure.
     for (uint8_t pin = 0; pin < 8; pin++) {
         _pcf->pinMode(pin, OUTPUT, HIGH);
     }
+
+    const bool ok = _pcf->begin();
+    if (!ok) {
+        DebugLogger::instance().log("Relay expander init failed");
+    }
+
     _dirty = true;
     commit();
+    return ok;
 }
 
 void RelayManager::set(int pin, bool active) {

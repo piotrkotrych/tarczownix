@@ -1,12 +1,15 @@
 #pragma once
 #include <Arduino.h>
-#include <functional>
 
 class Microphone {
 public:
-    using GunshotCallback = std::function<void()>;
+    // Plain function pointer rather than std::function: the callback is read from the
+    // sampling task, and copying a std::function there would mean allocating inside a
+    // critical section.
+    using GunshotCallback = void (*)();
 
     // Analog (ADC) microphone. Default pin is GPIO36 (ADC1_CH0) on many ESP32 boards.
+    // ADC1 is required - ADC2 is unusable while WiFi is active.
     explicit Microphone(int adcPin = 36);
     void begin();
     void setCallback(GunshotCallback callback);
@@ -21,13 +24,14 @@ public:
 
 private:
     int _adcPin;
-    int _threshold;
-    GunshotCallback _callback;
-    portMUX_TYPE _callbackMux;
+    volatile int _threshold;
+    // 32-bit aligned scalars: assignment is atomic on ESP32, so no lock is needed for
+    // the single-writer/single-reader access pattern used here.
+    GunshotCallback volatile _callback;
     TaskHandle_t _taskHandle;
     unsigned long _lastTriggerTime;
-    const unsigned long DEBOUNCE_MS = 200;
-    int _baseline;
+    static const unsigned long DEBOUNCE_MS = 200;
+    volatile int _baseline;
 
     volatile int _lastValue;
     volatile int _lastPeak;

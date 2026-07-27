@@ -22,7 +22,10 @@ void Target::setDeadtimeMs(unsigned long deadtimeMs) {
 }
 
 void Target::show() {
-    if (_state == ERROR) return;
+    if (_state == ERROR) {
+        DebugLogger::instance().log("Target show ignored: in ERROR, reset first");
+        return;
+    }
     if (_inputs->isActive(_sensorShown)) {
         stop();
         _state = SHOWN;
@@ -41,7 +44,10 @@ void Target::show() {
 }
 
 void Target::hide() {
-    if (_state == ERROR) return;
+    if (_state == ERROR) {
+        DebugLogger::instance().log("Target hide ignored: in ERROR, reset first");
+        return;
+    }
     if (_inputs->isActive(_sensorHidden)) {
         stop();
         _state = HIDDEN;
@@ -66,17 +72,37 @@ void Target::stop() {
     _relays->set(_hideRelay, false);
     _relays->commit();
 
-    if (_inputs->isActive(_sensorShown)) {
-        _state = SHOWN;
-    } else if (_inputs->isActive(_sensorHidden)) {
-        _state = HIDDEN;
-    } else if (wasMoving) {
-        _state = STOPPED;
+    // A latched ERROR is only cleared by reset(); stopping must not silently mask it.
+    if (_state != ERROR) {
+        if (_inputs->isActive(_sensorShown)) {
+            _state = SHOWN;
+        } else if (_inputs->isActive(_sensorHidden)) {
+            _state = HIDDEN;
+        } else if (wasMoving) {
+            _state = STOPPED;
+        }
     }
 
     if (wasMoving) {
         DebugLogger::instance().log("Target stop: relays off");
     }
+}
+
+void Target::reset() {
+    _pendingMove = false;
+    _relays->set(_showRelay, false);
+    _relays->set(_hideRelay, false);
+    _relays->commit();
+
+    if (_inputs->isActive(_sensorShown)) {
+        _state = SHOWN;
+    } else if (_inputs->isActive(_sensorHidden)) {
+        _state = HIDDEN;
+    } else {
+        _state = STOPPED;
+    }
+
+    DebugLogger::instance().log("Target reset -> %d", (int)_state);
 }
 
 void Target::update() {

@@ -13,24 +13,51 @@
         .show-btn { background-color: #4CAF50; color: white; border: none; }
         .hide-btn { background-color: #f44336; color: white; border: none; }
         .stop-btn { background-color: #777; color: white; border: none; }
+        .reset-btn { background-color: #ff9800; color: white; border: none; }
         .row { display: flex; flex-wrap: wrap; justify-content: center; }
         .panel { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin: 10px; width: 460px; text-align: left; }
         .panel pre { background: #f7f7f7; padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; }
+        .conn { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 13px; color: white; background: #f44336; }
+        .conn.online { background: #4CAF50; }
+        .field { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
+        .field label { font-size: 14px; }
+        .field input { width: 120px; padding: 5px; }
+        .hint { color: #666; font-size: 12px; margin: 4px 0 10px; }
+        #settings-msg { font-size: 13px; margin-left: 8px; }
     </style>
 </head>
 <body>
     <h1>Tarczownix Control</h1>
+    <p><span id="conn-status" class="conn">disconnected</span></p>
     <div class="row">
-        <div class="panel" style="max-width: 460px;">
+        <div class="panel">
             <h2>Mode</h2>
             <button onclick="setMode('manual')">Manual</button>
             <button onclick="setMode('sequence')">Sequence</button>
             <button onclick="setMode('competition')">Competition</button>
+            <p class="hint">Current mode: <strong id="current-mode">-</strong> <span id="current-comp-state"></span></p>
+            <button onclick="sendCommand(0, 'arm')">Arm / Restart Run</button>
             <button onclick="triggerGunshot()">Gunshot Trigger</button>
+            <button class="stop-btn" onclick="sendCommand(0, 'stop')">Stop All</button>
+            <button class="reset-btn" onclick="sendCommand(0, 'reset')">Reset Errors</button>
         </div>
     </div>
     <div class="row" id="targets"></div>
     <div class="row">
+        <div class="panel">
+            <h2>Settings</h2>
+            <div class="field"><label for="micThreshold">Mic threshold (100-4095)</label><input type="number" id="micThreshold" min="100" max="4095"></div>
+            <div class="field"><label for="targetTimeoutMs">Move timeout ms (500-120000)</label><input type="number" id="targetTimeoutMs" min="500" max="120000"></div>
+            <div class="field"><label for="t1Delay">T1 delay ms (0-60000)</label><input type="number" id="t1Delay" min="0" max="60000"></div>
+            <div class="field"><label for="t1Duration">T1 shown ms (100-60000)</label><input type="number" id="t1Duration" min="100" max="60000"></div>
+            <div class="field"><label for="t2Delay">T2 delay ms (0-60000)</label><input type="number" id="t2Delay" min="0" max="60000"></div>
+            <div class="field"><label for="t2Duration">T2 shown ms (100-60000)</label><input type="number" id="t2Duration" min="100" max="60000"></div>
+            <div class="field"><label for="t3Delay">T3 delay ms (0-60000)</label><input type="number" id="t3Delay" min="0" max="60000"></div>
+            <div class="field"><label for="t3Duration">T3 shown ms (100-60000)</label><input type="number" id="t3Duration" min="100" max="60000"></div>
+            <button onclick="loadSettings()">Reload</button>
+            <button onclick="saveSettings()">Save</button>
+            <span id="settings-msg"></span>
+        </div>
         <div class="panel">
             <h2>Diagnostics</h2>
             <pre id="diag-output">(empty)</pre>

@@ -127,5 +127,14 @@ void ModeSequence::handleInput(int targetId, String cmd) {
     (void)targetId;
     if (cmd == "stop") {
         stop();
+    } else if (cmd == "arm" || cmd == "start") {
+        // stop() parks the mode in SEQ_IDLE; this is how the run is picked back up.
+        start();
+    } else if (cmd == "reset") {
+        _t1->reset();
+        _t2->reset();
+        _t3->reset();
+        _state = SEQ_IDLE;
+        _activeTargetId = 0;
     }
 }

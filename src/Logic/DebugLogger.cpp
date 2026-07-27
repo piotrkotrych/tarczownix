@@ -2,7 +2,7 @@
 #include <ArduinoJson.h>
 #include <cstdarg>
 
-DebugLogger::DebugLogger() : _head(0), _count(0), _mux(portMUX_INITIALIZER_UNLOCKED) {
+DebugLogger::DebugLogger() : _head(0), _count(0), _sequence(0), _mux(portMUX_INITIALIZER_UNLOCKED) {
 }
 
 DebugLogger& DebugLogger::instance() {
@@ -25,29 +25,35 @@ void DebugLogger::log(const char* fmt, ...) {
     if (_count < MAX_LOGS) {
         _count++;
     }
+    _sequence++;
     portEXIT_CRITICAL(&_mux);
 }
 
 String DebugLogger::getJson() {
-    LogEntry snapshot[MAX_LOGS];
-    size_t count = 0;
-
-    portENTER_CRITICAL(&_mux);
-    count = _count;
-    const size_t start = (_head + MAX_LOGS - count) % MAX_LOGS;
-    for (size_t i = 0; i < count; i++) {
-        const size_t idx = (start + i) % MAX_LOGS;
-        snapshot[i] = _logs[idx];
-    }
-    portEXIT_CRITICAL(&_mux);
-
     JsonDocument doc;
     JsonArray arr = doc["logs"].to<JsonArray>();
 
-    for (size_t i = 0; i < count; i++) {
+    // Copy one entry at a time rather than snapshotting the whole ring buffer: the full
+    // snapshot was ~6.4 KB of stack, and this runs on the AsyncTCP task.
+    LogEntry entry;
+    for (size_t i = 0;; i++) {
+        bool hasEntry = false;
+
+        portENTER_CRITICAL(&_mux);
+        if (i < _count) {
+            const size_t start = (_head + MAX_LOGS - _count) % MAX_LOGS;
+            entry = _logs[(start + i) % MAX_LOGS];
+            hasEntry = true;
+        }
+        portEXIT_CRITICAL(&_mux);
+
+        if (!hasEntry) {
+            break;
+        }
+
         JsonObject item = arr.add<JsonObject>();
-        item["ms"] = snapshot[i].ms;
-        item["msg"] = snapshot[i].msg;
+        item["ms"] = entry.ms;
+        item["msg"] = entry.msg;
     }
 
     String out;
@@ -59,6 +65,7 @@ void DebugLogger::clear() {
     portENTER_CRITICAL(&_mux);
     _head = 0;
     _count = 0;
+    _sequence++;
     portEXIT_CRITICAL(&_mux);
 }
 
@@ -67,4 +74,11 @@ size_t DebugLogger::getCount() {
     const size_t count = _count;
     portEXIT_CRITICAL(&_mux);
     return count;
+}
+
+unsigned long DebugLogger::getSequence() {
+    portENTER_CRITICAL(&_mux);
+    const unsigned long sequence = _sequence;
+    portEXIT_CRITICAL(&_mux);
+    return sequence;
 }

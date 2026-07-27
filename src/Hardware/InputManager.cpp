@@ -3,10 +3,15 @@
 InputManager::InputManager(PCF8574* pcf) : _pcf(pcf), _lastRaw(0xFF), _stableState(0xFF), _lastDebounceTime(0) {
 }
 
-void InputManager::begin() {
+bool InputManager::begin() {
+    // Pin modes must be declared BEFORE PCF8574::begin(): the library snapshots the
+    // pull-up mask there to seed its read buffer. Initialising in the other order leaves
+    // that buffer at 0, which makes every input read as permanently active.
     for (uint8_t pin = 0; pin < 8; pin++) {
         _pcf->pinMode(pin, INPUT_PULLUP);
     }
+
+    return _pcf->begin();
 }
 
 void InputManager::update() {

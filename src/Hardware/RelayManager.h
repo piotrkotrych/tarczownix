@@ -5,7 +5,9 @@
 class RelayManager {
 public:
     RelayManager(PCF8574* pcf);
-    void begin();
+    // Configures the expander pins and brings up the I2C device.
+    // Must be called before any set()/commit(); returns false if the expander did not answer.
+    bool begin();
     void set(int pin, bool active);
     bool commit();
     uint8_t getShadowRegister() const { return _shadowRegister; }

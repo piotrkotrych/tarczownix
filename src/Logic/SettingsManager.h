@@ -17,6 +17,7 @@ struct Config {
 class SettingsManager {
 public:
     SettingsManager();
+    static bool mountFilesystem();
     void begin();
     void load();
     void save();

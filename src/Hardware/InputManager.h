@@ -5,7 +5,9 @@
 class InputManager {
 public:
     InputManager(PCF8574* pcf);
-    void begin();
+    // Configures the expander pins and brings up the I2C device.
+    // Must be called before update(); returns false if the expander did not answer.
+    bool begin();
     void update();
     bool isActive(int pin);
     uint8_t getRaw() const { return _lastRaw; }
